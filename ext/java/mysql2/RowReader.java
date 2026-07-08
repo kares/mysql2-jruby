@@ -82,10 +82,12 @@ final class RowReader {
         return hash;
     }
 
-    /** Field names (Mysql2::Result#fields), always as strings. */
+    /** Field names (Mysql2::Result#fields), always as frozen strings. */
     IRubyObject[] fieldNames(final Ruby runtime) {
         IRubyObject[] names = new IRubyObject[count];
-        for (int i = 0; i < count; i++) names[i] = runtime.newString(fields[i].name);
+        for (int i = 0; i < count; i++) {
+            names[i] = runtime.freezeAndDedupString(runtime.newString(fields[i].name));
+        }
         return names;
     }
 

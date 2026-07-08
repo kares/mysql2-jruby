@@ -48,8 +48,9 @@ public class Result extends RubyObject {
 
     @JRubyMethod
     public IRubyObject each(ThreadContext context, Block block) {
-        if (!block.isGiven()) throw context.runtime.newLocalJumpErrorNoBlock();
-
+        // Like mysql2: rows are yielded, not required. With no block a non-empty
+        // result raises LocalJumpError on the first yield, an empty one returns
+        // cleanly (so `result.each.to_a` works for empty results).
         if (cachedRows != null) {
             for (int i = 0; i < cachedRows.length; i++) block.yield(context, cachedRows[i]);
             return this;
