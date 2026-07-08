@@ -293,7 +293,7 @@ public class Client extends RubyObject {
         return hash;
     }
 
-    /** Local timezone offset as a day fraction (Rational); matches mysql2. */
+    /** Local timezone offset as a day fraction (Rational); matches mysql2 */
     @JRubyMethod(meta = true, name = "local_offset")
     public static IRubyObject localOffset(ThreadContext context, IRubyObject self) {
         Ruby runtime = context.runtime;
@@ -302,9 +302,8 @@ public class Client extends RubyObject {
         return offset.callMethod(context, "/", runtime.newFixnum(86400));
     }
 
-    /** Define Mysql2::Client connection-flag / SSL / session-track constants
-     *  (standard libmysql values). Called from the extension loader. */
-    static void defineConstants(Ruby runtime, RubyClass c) {
+    /** Define Mysql2::Client connection-flag / SSL / session-track constants */
+    static void defineConstants(Ruby runtime, RubyClass klass) {
         // CLIENT_* capability flags (mysql_com.h)
         long LONG_PASSWORD = 1, FOUND_ROWS = 2, LONG_FLAG = 4, CONNECT_WITH_DB = 8,
              NO_SCHEMA = 16, COMPRESS = 32, ODBC = 64, LOCAL_FILES = 128, IGNORE_SPACE = 256,
@@ -320,53 +319,53 @@ public class Client extends RubyObject {
              | SSL_VERIFY_SERVER_CERT | REMEMBER_OPTIONS;
         long BASIC_FLAGS = ALL_FLAGS & ~(SSL | COMPRESS | SSL_VERIFY_SERVER_CERT);
 
-        con(runtime, c, "LONG_PASSWORD", LONG_PASSWORD);
-        con(runtime, c, "FOUND_ROWS", FOUND_ROWS);
-        con(runtime, c, "LONG_FLAG", LONG_FLAG);
-        con(runtime, c, "CONNECT_WITH_DB", CONNECT_WITH_DB);
-        con(runtime, c, "NO_SCHEMA", NO_SCHEMA);
-        con(runtime, c, "COMPRESS", COMPRESS);
-        con(runtime, c, "ODBC", ODBC);
-        con(runtime, c, "LOCAL_FILES", LOCAL_FILES);
-        con(runtime, c, "IGNORE_SPACE", IGNORE_SPACE);
-        con(runtime, c, "PROTOCOL_41", PROTOCOL_41);
-        con(runtime, c, "INTERACTIVE", INTERACTIVE);
-        con(runtime, c, "SSL", SSL);
-        con(runtime, c, "IGNORE_SIGPIPE", IGNORE_SIGPIPE);
-        con(runtime, c, "TRANSACTIONS", TRANSACTIONS);
-        con(runtime, c, "RESERVED", RESERVED);
-        con(runtime, c, "SECURE_CONNECTION", SECURE_CONNECTION);
-        con(runtime, c, "MULTI_STATEMENTS", MULTI_STATEMENTS);
-        con(runtime, c, "PS_MULTI_RESULTS", PS_MULTI_RESULTS);
-        con(runtime, c, "CONNECT_ATTRS", CONNECT_ATTRS);
-        con(runtime, c, "SESSION_TRACK", SESSION_TRACK);
-        con(runtime, c, "SSL_VERIFY_SERVER_CERT", SSL_VERIFY_SERVER_CERT);
-        con(runtime, c, "REMEMBER_OPTIONS", REMEMBER_OPTIONS);
-        con(runtime, c, "ALL_FLAGS", ALL_FLAGS);
-        con(runtime, c, "BASIC_FLAGS", BASIC_FLAGS);
+        constant(runtime, klass, "LONG_PASSWORD", LONG_PASSWORD);
+        constant(runtime, klass, "FOUND_ROWS", FOUND_ROWS);
+        constant(runtime, klass, "LONG_FLAG", LONG_FLAG);
+        constant(runtime, klass, "CONNECT_WITH_DB", CONNECT_WITH_DB);
+        constant(runtime, klass, "NO_SCHEMA", NO_SCHEMA);
+        constant(runtime, klass, "COMPRESS", COMPRESS);
+        constant(runtime, klass, "ODBC", ODBC);
+        constant(runtime, klass, "LOCAL_FILES", LOCAL_FILES);
+        constant(runtime, klass, "IGNORE_SPACE", IGNORE_SPACE);
+        constant(runtime, klass, "PROTOCOL_41", PROTOCOL_41);
+        constant(runtime, klass, "INTERACTIVE", INTERACTIVE);
+        constant(runtime, klass, "SSL", SSL);
+        constant(runtime, klass, "IGNORE_SIGPIPE", IGNORE_SIGPIPE);
+        constant(runtime, klass, "TRANSACTIONS", TRANSACTIONS);
+        constant(runtime, klass, "RESERVED", RESERVED);
+        constant(runtime, klass, "SECURE_CONNECTION", SECURE_CONNECTION);
+        constant(runtime, klass, "MULTI_STATEMENTS", MULTI_STATEMENTS);
+        constant(runtime, klass, "PS_MULTI_RESULTS", PS_MULTI_RESULTS);
+        constant(runtime, klass, "CONNECT_ATTRS", CONNECT_ATTRS);
+        constant(runtime, klass, "SESSION_TRACK", SESSION_TRACK);
+        constant(runtime, klass, "SSL_VERIFY_SERVER_CERT", SSL_VERIFY_SERVER_CERT);
+        constant(runtime, klass, "REMEMBER_OPTIONS", REMEMBER_OPTIONS);
+        constant(runtime, klass, "ALL_FLAGS", ALL_FLAGS);
+        constant(runtime, klass, "BASIC_FLAGS", BASIC_FLAGS);
 
         // SSL modes (mysql_ssl_mode enum)
-        con(runtime, c, "SSL_MODE_DISABLED", 1);
-        con(runtime, c, "SSL_MODE_PREFERRED", 2);
-        con(runtime, c, "SSL_MODE_REQUIRED", 3);
-        con(runtime, c, "SSL_MODE_VERIFY_CA", 4);
-        con(runtime, c, "SSL_MODE_VERIFY_IDENTITY", 5);
+        constant(runtime, klass, "SSL_MODE_DISABLED", 1);
+        constant(runtime, klass, "SSL_MODE_PREFERRED", 2);
+        constant(runtime, klass, "SSL_MODE_REQUIRED", 3);
+        constant(runtime, klass, "SSL_MODE_VERIFY_CA", 4);
+        constant(runtime, klass, "SSL_MODE_VERIFY_IDENTITY", 5);
 
         // enum_session_state_type
-        con(runtime, c, "SESSION_TRACK_SYSTEM_VARIABLES", 0);
-        con(runtime, c, "SESSION_TRACK_SCHEMA", 1);
-        con(runtime, c, "SESSION_TRACK_STATE_CHANGE", 2);
-        con(runtime, c, "SESSION_TRACK_GTIDS", 3);
-        con(runtime, c, "SESSION_TRACK_TRANSACTION_CHARACTERISTICS", 4);
-        con(runtime, c, "SESSION_TRACK_TRANSACTION_STATE", 5);
+        constant(runtime, klass, "SESSION_TRACK_SYSTEM_VARIABLES", 0);
+        constant(runtime, klass, "SESSION_TRACK_SCHEMA", 1);
+        constant(runtime, klass, "SESSION_TRACK_STATE_CHANGE", 2);
+        constant(runtime, klass, "SESSION_TRACK_GTIDS", 3);
+        constant(runtime, klass, "SESSION_TRACK_TRANSACTION_CHARACTERISTICS", 4);
+        constant(runtime, klass, "SESSION_TRACK_TRANSACTION_STATE", 5);
 
         // enum mysql_option MYSQL_OPTION_MULTI_STATEMENTS_*
-        con(runtime, c, "OPTION_MULTI_STATEMENTS_ON", 0);
-        con(runtime, c, "OPTION_MULTI_STATEMENTS_OFF", 1);
+        constant(runtime, klass, "OPTION_MULTI_STATEMENTS_ON", 0);
+        constant(runtime, klass, "OPTION_MULTI_STATEMENTS_OFF", 1);
     }
 
-    private static void con(Ruby runtime, RubyClass c, String name, long value) {
-        c.defineConstant(name, runtime.newFixnum(value));
+    private static void constant(Ruby runtime, RubyClass klass, String name, long value) {
+        klass.defineConstant(name, runtime.newFixnum(value));
     }
 
     // --- helpers -------------------------------------------------------------
@@ -378,7 +377,9 @@ public class Client extends RubyObject {
         int n = in.length();
         int first = -1;
         for (int i = 0; i < n; i++) {
-            if (needsEscape((byte) in.get(i))) { first = i; break; }
+            if (needsEscape((byte) in.get(i))) {
+                first = i; break;
+            }
         }
         if (first < 0) return str;
 
@@ -402,8 +403,7 @@ public class Client extends RubyObject {
     }
 
     private static boolean needsEscape(byte b) {
-        return b == 0 || b == '\n' || b == '\r' || b == 0x1a
-                || b == '\\' || b == '\'' || b == '"';
+        return b == 0 || b == '\n' || b == '\r' || b == 0x1a || b == '\\' || b == '\'' || b == '"';
     }
 
     RubyClass errorClass(Ruby runtime) {
