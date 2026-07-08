@@ -27,6 +27,8 @@ public class Result extends RubyObject {
     private RowReader reader;
     private IRubyObject[] cachedRows;
     private boolean closed;
+    private int streamedCount;         // rows yielded/drained so far (streaming)
+    private boolean streamingComplete; // streaming result fully consumed
 
     public Result(Ruby runtime, RubyClass klass, ResultSet resultSet, Statement statement, RowReader reader, boolean cacheRows) {
         super(runtime, klass);
@@ -48,25 +50,31 @@ public class Result extends RubyObject {
 
     @JRubyMethod
     public IRubyObject each(ThreadContext context, Block block) {
-        // Like mysql2: rows are yielded, not required. With no block a non-empty
-        // result raises LocalJumpError on the first yield, an empty one returns
-        // cleanly (so `result.each.to_a` works for empty results).
+        // Cached (cache_rows, default): rows were buffered at construction. Yield
+        // them; with no block a non-empty result raises LocalJumpError on the
+        // first yield, an empty one returns cleanly.
         if (cachedRows != null) {
             for (int i = 0; i < cachedRows.length; i++) block.yield(context, cachedRows[i]);
             return this;
         }
 
+        // Streaming (cache_rows: false): drain lazily. Rows are always fetched
+        // (so #count tracks progress) but only yielded when a block is given.
+        // The result set is closed only on full exhaustion, so a partial consume
+        // (e.g. #first) can be resumed by a later #each.
         final Ruby runtime = context.runtime;
-        // streaming (cache_rows: false): read lazily from the live result set.
-        try {
-            IRubyObject row;
-            while (!(row = reader.nextRow(runtime)).isNil()) {
-                block.yield(context, row);
-            }
-        } finally {
-            close();
+        if (streamingComplete) {
+            throw streamingError(runtime, "You have already fetched all the rows for this query "
+                    + "and streaming is true. (to reiterate you must requery).");
         }
-        return this;
+        IRubyObject row;
+        while (!(row = reader.nextRow(runtime)).isNil()) {
+            streamedCount++;
+            if (block.isGiven()) block.yield(context, row);
+        }
+        streamingComplete = true;
+        close();
+        return runtime.newEmptyArray();
     }
 
     @JRubyMethod
@@ -81,8 +89,10 @@ public class Result extends RubyObject {
 
     @JRubyMethod(name = {"count", "size"})
     public IRubyObject count(ThreadContext context) {
-        RubyArray<?> all = (RubyArray<?>) callMethod(context, "to_a");
-        return context.runtime.newFixnum(all.size());
+        // Cached: total buffered rows. Streaming: rows drained so far (does not
+        // advance the stream), matching mysql2's running count.
+        int n = cachedRows != null ? cachedRows.length : streamedCount;
+        return context.runtime.newFixnum(n);
     }
 
     @JRubyMethod
@@ -94,6 +104,11 @@ public class Result extends RubyObject {
     @JRubyMethod(name = "server_flags")
     public IRubyObject server_flags(ThreadContext context) {
         return context.nil;
+    }
+
+    private RuntimeException streamingError(Ruby runtime, String message) {
+        RubyClass error = (RubyClass) runtime.getModule("Mysql2").getClass("Error");
+        return runtime.newRaiseException(error, message);
     }
 
     private void close() {
