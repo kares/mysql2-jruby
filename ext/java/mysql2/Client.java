@@ -30,6 +30,8 @@ public class Client extends RubyObject {
     private long affectedRows;
     private long lastId;
     private String queryInfoString; // mysql_info() of the last query, or null
+    private long warningCount;      // server warnings from the last query
+    private boolean automaticClose = true;
 
     public Client(Ruby runtime, RubyClass klass) {
         super(runtime, klass);
@@ -57,6 +59,8 @@ public class Client extends RubyObject {
         String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
 
         String encoding = orDefault(str(opt(context, opts, "encoding")), "utf8mb4");
+        IRubyObject ac = opt(context, opts, "automatic_close");
+        this.automaticClose = ac.isNil() ? true : ac.isTrue();
 
         String url = "jdbc:mysql://" + host + ":" + port + "/" + database
                 + "?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8";
@@ -117,6 +121,7 @@ public class Client extends RubyObject {
             stmt = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
             boolean hasResult = stmt.execute(sql, Statement.RETURN_GENERATED_KEYS);
             this.queryInfoString = extractServerInfo(stmt);
+            this.warningCount = countWarnings(stmt);
             if (hasResult) {
                 return buildResult(context, stmt.getResultSet(), stmt, merged);
             } else {
@@ -199,6 +204,35 @@ public class Client extends RubyObject {
     @JRubyMethod(name = "read_timeout")
     public IRubyObject read_timeout(ThreadContext context) {
         return context.nil;
+    }
+
+    @JRubyMethod(name = "warning_count")
+    public IRubyObject warning_count(ThreadContext context) {
+        return context.runtime.newFixnum(warningCount);
+    }
+
+    // Controls whether the connection is auto-closed on GC/fork. JDBC/Connector-J
+    // manages connection lifetime, so this is a stored flag honored on close.
+    @JRubyMethod(name = "automatic_close?")
+    public IRubyObject automatic_close_p(ThreadContext context) {
+        return context.runtime.newBoolean(automaticClose);
+    }
+
+    @JRubyMethod(name = "automatic_close=")
+    public IRubyObject set_automatic_close(ThreadContext context, IRubyObject value) {
+        this.automaticClose = value.isTrue();
+        return value;
+    }
+
+    private static long countWarnings(Statement stmt) {
+        try {
+            long n = 0;
+            java.sql.SQLWarning w = stmt.getWarnings();
+            while (w != null) { n++; w = w.getNextWarning(); }
+            return n;
+        } catch (SQLException e) {
+            return 0;
+        }
     }
 
     @JRubyMethod(name = "query_info_string")
