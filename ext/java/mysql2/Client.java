@@ -222,20 +222,17 @@ public class Client extends RubyObject {
         return info;
     }
 
-    /** MySQL's mysql_info() for the last query, via Connector/J's internal result. */
+    /** MySQL's mysql_info() for the last query, via Connector/J's internal result
+     *  (getResultSetInternal() is public on JdbcStatement; the returned type
+     *  extends com.mysql.cj.protocol.Resultset which exposes getServerInfo()). */
     private static String extractServerInfo(Statement stmt) {
+        if (!(stmt instanceof com.mysql.cj.jdbc.JdbcStatement)) return null;
         try {
-            java.lang.reflect.Field f = null;
-            for (Class<?> c = stmt.getClass(); c != null && f == null; c = c.getSuperclass()) {
-                try { f = c.getDeclaredField("results"); } catch (NoSuchFieldException ignore) { }
-            }
-            if (f == null) return null;
-            f.setAccessible(true);
-            Object results = f.get(stmt);
-            if (results == null) return null;
-            Object info = results.getClass().getMethod("getServerInfo").invoke(results);
-            String s = info == null ? null : info.toString();
-            return (s == null || s.isEmpty()) ? null : s;
+            com.mysql.cj.jdbc.result.ResultSetInternalMethods rs =
+                    ((com.mysql.cj.jdbc.JdbcStatement) stmt).getResultSetInternal();
+            if (rs == null) return null;
+            String info = rs.getServerInfo();
+            return (info == null || info.isEmpty()) ? null : info;
         } catch (Exception e) {
             return null;
         }
