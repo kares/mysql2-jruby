@@ -13,6 +13,7 @@ public class Mysql2Ext implements BasicLibraryService {
 
         RubyClass Client = Mysql2.defineClassUnder("Client", runtime.getObject(), mysql2.Client.ALLOCATOR);
         Client.defineAnnotatedMethods(mysql2.Client.class);
+        mysql2.Client.defineConstants(runtime, Client);
 
         RubyClass Result = Mysql2.defineClassUnder("Result", runtime.getObject(), mysql2.Result.ALLOCATOR);
         Result.includeModule(runtime.getEnumerable());

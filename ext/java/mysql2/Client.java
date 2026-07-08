@@ -199,6 +199,26 @@ public class Client extends RubyObject {
         return context.nil;
     }
 
+    @JRubyMethod(name = "database")
+    public IRubyObject database(ThreadContext context) {
+        try {
+            String db = connection.getCatalog();
+            return (db == null || db.isEmpty()) ? context.nil : context.runtime.newString(db);
+        } catch (SQLException e) {
+            throw errorFromSQL(context, e);
+        }
+    }
+
+    @JRubyMethod(name = "select_db")
+    public IRubyObject select_db(ThreadContext context, IRubyObject db) {
+        try {
+            connection.setCatalog(db.convertToString().asJavaString());
+        } catch (SQLException e) {
+            throw errorFromSQL(context, e);
+        }
+        return db;
+    }
+
     @JRubyMethod(name = "server_info")
     public IRubyObject server_info(ThreadContext context) {
         final Ruby runtime = context.runtime;
@@ -282,13 +302,90 @@ public class Client extends RubyObject {
         return offset.callMethod(context, "/", runtime.newFixnum(86400));
     }
 
+    /** Define Mysql2::Client connection-flag / SSL / session-track constants
+     *  (standard libmysql values). Called from the extension loader. */
+    static void defineConstants(Ruby runtime, RubyClass c) {
+        // CLIENT_* capability flags (mysql_com.h)
+        long LONG_PASSWORD = 1, FOUND_ROWS = 2, LONG_FLAG = 4, CONNECT_WITH_DB = 8,
+             NO_SCHEMA = 16, COMPRESS = 32, ODBC = 64, LOCAL_FILES = 128, IGNORE_SPACE = 256,
+             PROTOCOL_41 = 512, INTERACTIVE = 1024, SSL = 2048, IGNORE_SIGPIPE = 4096,
+             TRANSACTIONS = 8192, RESERVED = 16384, SECURE_CONNECTION = 32768,
+             MULTI_STATEMENTS = 65536, MULTI_RESULTS = 131072, PS_MULTI_RESULTS = 262144,
+             PLUGIN_AUTH = 524288, CONNECT_ATTRS = 1048576, SESSION_TRACK = 1L << 23,
+             SSL_VERIFY_SERVER_CERT = 1L << 30, REMEMBER_OPTIONS = 1L << 31;
+        long ALL_FLAGS = LONG_PASSWORD | FOUND_ROWS | LONG_FLAG | CONNECT_WITH_DB | NO_SCHEMA
+             | COMPRESS | ODBC | LOCAL_FILES | IGNORE_SPACE | PROTOCOL_41 | INTERACTIVE | SSL
+             | IGNORE_SIGPIPE | TRANSACTIONS | RESERVED | SECURE_CONNECTION | MULTI_STATEMENTS
+             | MULTI_RESULTS | PS_MULTI_RESULTS | PLUGIN_AUTH | CONNECT_ATTRS | SESSION_TRACK
+             | SSL_VERIFY_SERVER_CERT | REMEMBER_OPTIONS;
+        long BASIC_FLAGS = ALL_FLAGS & ~(SSL | COMPRESS | SSL_VERIFY_SERVER_CERT);
+
+        con(runtime, c, "LONG_PASSWORD", LONG_PASSWORD);
+        con(runtime, c, "FOUND_ROWS", FOUND_ROWS);
+        con(runtime, c, "LONG_FLAG", LONG_FLAG);
+        con(runtime, c, "CONNECT_WITH_DB", CONNECT_WITH_DB);
+        con(runtime, c, "NO_SCHEMA", NO_SCHEMA);
+        con(runtime, c, "COMPRESS", COMPRESS);
+        con(runtime, c, "ODBC", ODBC);
+        con(runtime, c, "LOCAL_FILES", LOCAL_FILES);
+        con(runtime, c, "IGNORE_SPACE", IGNORE_SPACE);
+        con(runtime, c, "PROTOCOL_41", PROTOCOL_41);
+        con(runtime, c, "INTERACTIVE", INTERACTIVE);
+        con(runtime, c, "SSL", SSL);
+        con(runtime, c, "IGNORE_SIGPIPE", IGNORE_SIGPIPE);
+        con(runtime, c, "TRANSACTIONS", TRANSACTIONS);
+        con(runtime, c, "RESERVED", RESERVED);
+        con(runtime, c, "SECURE_CONNECTION", SECURE_CONNECTION);
+        con(runtime, c, "MULTI_STATEMENTS", MULTI_STATEMENTS);
+        con(runtime, c, "PS_MULTI_RESULTS", PS_MULTI_RESULTS);
+        con(runtime, c, "CONNECT_ATTRS", CONNECT_ATTRS);
+        con(runtime, c, "SESSION_TRACK", SESSION_TRACK);
+        con(runtime, c, "SSL_VERIFY_SERVER_CERT", SSL_VERIFY_SERVER_CERT);
+        con(runtime, c, "REMEMBER_OPTIONS", REMEMBER_OPTIONS);
+        con(runtime, c, "ALL_FLAGS", ALL_FLAGS);
+        con(runtime, c, "BASIC_FLAGS", BASIC_FLAGS);
+
+        // SSL modes (mysql_ssl_mode enum)
+        con(runtime, c, "SSL_MODE_DISABLED", 1);
+        con(runtime, c, "SSL_MODE_PREFERRED", 2);
+        con(runtime, c, "SSL_MODE_REQUIRED", 3);
+        con(runtime, c, "SSL_MODE_VERIFY_CA", 4);
+        con(runtime, c, "SSL_MODE_VERIFY_IDENTITY", 5);
+
+        // enum_session_state_type
+        con(runtime, c, "SESSION_TRACK_SYSTEM_VARIABLES", 0);
+        con(runtime, c, "SESSION_TRACK_SCHEMA", 1);
+        con(runtime, c, "SESSION_TRACK_STATE_CHANGE", 2);
+        con(runtime, c, "SESSION_TRACK_GTIDS", 3);
+        con(runtime, c, "SESSION_TRACK_TRANSACTION_CHARACTERISTICS", 4);
+        con(runtime, c, "SESSION_TRACK_TRANSACTION_STATE", 5);
+
+        // enum mysql_option MYSQL_OPTION_MULTI_STATEMENTS_*
+        con(runtime, c, "OPTION_MULTI_STATEMENTS_ON", 0);
+        con(runtime, c, "OPTION_MULTI_STATEMENTS_OFF", 1);
+    }
+
+    private static void con(Ruby runtime, RubyClass c, String name, long value) {
+        c.defineConstant(name, runtime.newFixnum(value));
+    }
+
     // --- helpers -------------------------------------------------------------
 
-    private static RubyString escapeString(Ruby runtime, RubyString str) {
+    // Byte-level SQL escaping. Like mysql2/mysql_real_escape_string, the original
+    // string object is returned unchanged when nothing needs escaping.
+    private static IRubyObject escapeString(Ruby runtime, RubyString str) {
         ByteList in = str.getByteList();
-        ByteList out = new ByteList(in.length() + 8);
+        int n = in.length();
+        int first = -1;
+        for (int i = 0; i < n; i++) {
+            if (needsEscape((byte) in.get(i))) { first = i; break; }
+        }
+        if (first < 0) return str;
+
+        ByteList out = new ByteList(n + 8);
         out.setEncoding(in.getEncoding());
-        for (int i = 0; i < in.length(); i++) {
+        out.append(in.getUnsafeBytes(), in.begin(), first); // unescaped prefix
+        for (int i = first; i < n; i++) {
             byte b = (byte) in.get(i);
             switch (b) {
                 case 0:    out.append('\\'); out.append('0'); break;
@@ -302,6 +399,11 @@ public class Client extends RubyObject {
             }
         }
         return runtime.newString(out);
+    }
+
+    private static boolean needsEscape(byte b) {
+        return b == 0 || b == '\n' || b == '\r' || b == 0x1a
+                || b == '\\' || b == '\'' || b == '"';
     }
 
     RubyClass errorClass(Ruby runtime) {
@@ -327,10 +429,11 @@ public class Client extends RubyObject {
         Ruby runtime = context.runtime;
         for (String name : names) {
             if (name == null) continue;
-            IRubyObject v = opts.op_aref(context, runtime.newSymbol(name));
-            if (!v.isNil()) return v;
-            v = opts.op_aref(context, runtime.newString(name));
-            if (!v.isNil()) return v;
+            // A present key wins even if its value is nil (e.g. database: nil
+            // overriding a string "database" key), matching mysql2's symbolized opts.
+            IRubyObject v = opts.fastARef(runtime.newSymbol(name));
+            if (v == null) v = opts.fastARef(runtime.newString(name));
+            if (v != null) return v;
         }
         return context.nil;
     }
