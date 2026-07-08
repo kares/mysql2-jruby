@@ -22,6 +22,7 @@ final class RowReader {
     private final IRubyObject[] keys; // hash keys (String or Symbol), null when asArray
     private final int count;
     private final boolean asArray;
+    private final boolean symbolizeKeys;
     private final boolean cast;
     private final CastCtx ctx;
 
@@ -38,6 +39,7 @@ final class RowReader {
         this.resultSet = resultSet;
         this.row = new JdbcTextRow(resultSet);
         this.asArray = asArray;
+        this.symbolizeKeys = symbolizeKeys;
         this.cast = cast;
         this.ctx = new CastCtx(runtime, castBool, dbTimezone, appTimezone, errorClass, localOffset);
 
@@ -100,5 +102,18 @@ final class RowReader {
 
     int fieldCount() {
         return count;
+    }
+
+    boolean isAsArray() {
+        return asArray;
+    }
+
+    boolean isSymbolizeKeys() {
+        return symbolizeKeys;
+    }
+
+    /** Field name as a Symbol or String, for rebuilding rows under per-call options. */
+    IRubyObject key(Ruby runtime, int i, boolean symbolize) {
+        return symbolize ? runtime.newSymbol(fields[i].name) : runtime.newString(fields[i].name);
     }
 }

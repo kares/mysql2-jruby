@@ -29,6 +29,7 @@ public class Client extends RubyObject {
     private RubyHash queryOptions;
     private long affectedRows;
     private long lastId;
+    private String queryInfoString; // mysql_info() of the last query, or null
 
     public Client(Ruby runtime, RubyClass klass) {
         super(runtime, klass);
@@ -115,6 +116,7 @@ public class Client extends RubyObject {
         try {
             stmt = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
             boolean hasResult = stmt.execute(sql, Statement.RETURN_GENERATED_KEYS);
+            this.queryInfoString = extractServerInfo(stmt);
             if (hasResult) {
                 return buildResult(context, stmt.getResultSet(), stmt, merged);
             } else {
@@ -197,6 +199,46 @@ public class Client extends RubyObject {
     @JRubyMethod(name = "read_timeout")
     public IRubyObject read_timeout(ThreadContext context) {
         return context.nil;
+    }
+
+    @JRubyMethod(name = "query_info_string")
+    public IRubyObject query_info_string(ThreadContext context) {
+        return queryInfoString == null ? context.nil : context.runtime.newString(queryInfoString);
+    }
+
+    @JRubyMethod(name = "query_info")
+    public IRubyObject query_info(ThreadContext context) {
+        Ruby runtime = context.runtime;
+        RubyHash info = RubyHash.newHash(runtime);
+        if (queryInfoString == null) return info;
+        // "Records: 2  Duplicates: 0  Warnings: 0" -> {records: 2, duplicates: 0, warnings: 0}
+        String[] parts = queryInfoString.trim().split("\\s+");
+        for (int i = 0; i + 1 < parts.length; i += 2) {
+            String key = parts[i].toLowerCase().replace(":", "");
+            long value = 0;
+            try { value = Long.parseLong(parts[i + 1]); } catch (NumberFormatException ignore) { }
+            info.fastASet(runtime.newSymbol(key), runtime.newFixnum(value));
+        }
+        return info;
+    }
+
+    /** MySQL's mysql_info() for the last query, via Connector/J's internal result. */
+    private static String extractServerInfo(Statement stmt) {
+        try {
+            java.lang.reflect.Field f = null;
+            for (Class<?> c = stmt.getClass(); c != null && f == null; c = c.getSuperclass()) {
+                try { f = c.getDeclaredField("results"); } catch (NoSuchFieldException ignore) { }
+            }
+            if (f == null) return null;
+            f.setAccessible(true);
+            Object results = f.get(stmt);
+            if (results == null) return null;
+            Object info = results.getClass().getMethod("getServerInfo").invoke(results);
+            String s = info == null ? null : info.toString();
+            return (s == null || s.isEmpty()) ? null : s;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @JRubyMethod(name = "database")

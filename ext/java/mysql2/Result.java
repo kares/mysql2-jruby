@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import org.jruby.Ruby;
 import org.jruby.RubyArray;
 import org.jruby.RubyClass;
+import org.jruby.RubyHash;
 import org.jruby.RubyObject;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.runtime.Block;
@@ -48,13 +49,29 @@ public class Result extends RubyObject {
         }
     }
 
-    @JRubyMethod
-    public IRubyObject each(ThreadContext context, Block block) {
+    @JRubyMethod(optional = 1)
+    public IRubyObject each(ThreadContext context, IRubyObject[] args, Block block) {
+        final Ruby runtime = context.runtime;
+
+        // Per-call as:/symbolize_keys: override the query-time row format.
+        boolean targetArray = reader.isAsArray();
+        boolean targetSym = reader.isSymbolizeKeys();
+        if (args.length > 0 && args[0] instanceof RubyHash) {
+            RubyHash o = (RubyHash) args[0];
+            IRubyObject as = o.op_aref(context, runtime.newSymbol("as"));
+            if (!as.isNil()) targetArray = as.equals(runtime.newSymbol("array"));
+            IRubyObject sk = o.op_aref(context, runtime.newSymbol("symbolize_keys"));
+            if (!sk.isNil()) targetSym = sk.isTrue();
+        }
+        boolean transform = targetArray != reader.isAsArray() || targetSym != reader.isSymbolizeKeys();
+
         // Cached (cache_rows, default): rows were buffered at construction. Yield
         // them; with no block a non-empty result raises LocalJumpError on the
         // first yield, an empty one returns cleanly.
         if (cachedRows != null) {
-            for (int i = 0; i < cachedRows.length; i++) block.yield(context, cachedRows[i]);
+            for (int i = 0; i < cachedRows.length; i++) {
+                block.yield(context, transform ? transformRow(context, cachedRows[i], targetArray, targetSym) : cachedRows[i]);
+            }
             return this;
         }
 
@@ -62,7 +79,6 @@ public class Result extends RubyObject {
         // (so #count tracks progress) but only yielded when a block is given.
         // The result set is closed only on full exhaustion, so a partial consume
         // (e.g. #first) can be resumed by a later #each.
-        final Ruby runtime = context.runtime;
         if (streamingComplete) {
             throw streamingError(runtime, "You have already fetched all the rows for this query "
                     + "and streaming is true. (to reiterate you must requery).");
@@ -70,11 +86,33 @@ public class Result extends RubyObject {
         IRubyObject row;
         while (!(row = reader.nextRow(runtime)).isNil()) {
             streamedCount++;
-            if (block.isGiven()) block.yield(context, row);
+            if (block.isGiven()) {
+                block.yield(context, transform ? transformRow(context, row, targetArray, targetSym) : row);
+            }
         }
         streamingComplete = true;
         close();
         return runtime.newEmptyArray();
+    }
+
+    /** Convert a buffered row to the per-call as:/symbolize_keys format. */
+    private IRubyObject transformRow(ThreadContext context, IRubyObject row, boolean targetArray, boolean targetSym) {
+        final Ruby runtime = context.runtime;
+        if (row instanceof RubyArray) {
+            RubyArray<?> arr = (RubyArray<?>) row;
+            if (targetArray) return arr;
+            RubyHash h = RubyHash.newHash(runtime);
+            for (int i = 0; i < arr.size(); i++) h.fastASet(reader.key(runtime, i, targetSym), arr.eltInternal(i));
+            return h;
+        }
+        RubyHash hash = (RubyHash) row;
+        if (targetArray) return hash.callMethod(context, "values");
+        RubyHash h = RubyHash.newHash(runtime);
+        RubyArray<?> hkeys = hash.keys();
+        for (int i = 0; i < hkeys.size(); i++) {
+            h.fastASet(reader.key(runtime, i, targetSym), hash.op_aref(context, hkeys.eltInternal(i)));
+        }
+        return h;
     }
 
     @JRubyMethod
