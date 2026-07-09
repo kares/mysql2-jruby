@@ -627,7 +627,10 @@ public class Client extends RubyObject {
 
     RuntimeException errorFromSQL(ThreadContext context, SQLException e) {
         Ruby runtime = context.runtime;
-        IRubyObject errno = runtime.newFixnum(e.getErrorCode());
+        // A vendor code of 0 means the driver raised it, not the server (no MySQL errno);
+        // mysql2 reports nil there, and ActiveRecord keys its "not connected" branch off nil.
+        int code = e.getErrorCode();
+        IRubyObject errno = code == 0 ? runtime.getNil() : runtime.newFixnum(code);
         IRubyObject sqlState = e.getSQLState() == null ? runtime.getNil() : runtime.newString(e.getSQLState());
         RubyException exc = (RubyException) errorClass(runtime).callMethod(context, "new_with_args",
                 new IRubyObject[]{runtime.newString(e.getMessage() == null ? "" : e.getMessage()),

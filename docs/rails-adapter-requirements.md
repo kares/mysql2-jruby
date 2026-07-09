@@ -217,19 +217,34 @@ failures only.
   after connect, or set `allowMultiQueries=true`). Tie this to the P1 `flags` work.
 
 ### P3 — correctness polish
-- [ ] Confirm `server_info[:version]` string parses via Rails'
-      `version_string` regex `^(?:5\.5\.5-)?(\d+\.\d+\.\d+)` (MariaDB prefix handling).
-      `mariadb?` keys off `full_version` containing "mariadb".
-- [ ] `Error#error_number` must return the MySQL vendor code (drives the whole
-      `translate_exception` switch in abstract_mysql_adapter — RecordNotUnique, Deadlocked,
-      LockWaitTimeout, etc.). Verify vendor codes come through unmodified for the codes in
-      that switch (1062, 1213, 1205, 1451/1452, 1264, 1406, 1048, …).
-- [ ] `Error::TimeoutError` / `Error::ConnectionError` subclasses exist ✅ and
-      `translate_exception` (mysql2_adapter:172) dispatches on them + message matching
-      `/MySQL client is not connected/i`. Ensure connection-lost errors carry that message
-      or the right subclass.
-- [ ] `warning_count` must reflect the **last** statement's warnings for `handle_warnings`
-      (used when `ActiveRecord.db_warnings_action` is set — off by default, low priority).
+- [x] **`Error#error_number` returns the MySQL vendor code** — driver `getErrorCode()` passes
+      the server errno through unmodified. Verified via `prototype/error_probe.rb` against live
+      MySQL: `ER_DUP_ENTRY 1062`, `ER_NO_REFERENCED_ROW_2 1452`, `ER_ROW_IS_REFERENCED_2 1451`,
+      `ER_BAD_NULL_ERROR 1048`, `ER_DATA_TOO_LONG 1406`, `ER_WARN_DATA_OUT_OF_RANGE 1264`,
+      `ER_PARSE_ERROR 1064`, `ER_NO_SUCH_TABLE 1146`, `ER_BAD_DB_ERROR 1049` all correct. So
+      AR's `translate_exception` switch (RecordNotUnique, InvalidForeignKey, NotNullViolation,
+      ValueTooLong, RangeError, NoDatabaseError, …) dispatches correctly.
+- [x] **Connection-error classification** — a driver-side exception carries vendor code `0`
+      (no server errno) and a `08`-class SQLSTATE. Now: code `0` → `error_number = nil`
+      (matches mysql2, and AR's `when nil` branch); SQLSTATE class `08` (e.g. `08S01`
+      communications link failure, `08003` connection does not exist) →
+      `Mysql2::Error::ConnectionError`. Verified: a `KILL`ed connection and a query on a
+      closed connection both raise `ConnectionError` with `error_number == nil`, so
+      mysql2_adapter's `is_a?(::Mysql2::Error::ConnectionError)` branch → `ConnectionFailed`.
+- [ ] `Error::TimeoutError` for a client-side `read_timeout`: mysql2 raises `TimeoutError`
+      (nil errno → AR `AdapterTimeout`). A JDBC `socketTimeout` currently surfaces as a `08`
+      `CommunicationsException` → routed to `ConnectionError`, not `TimeoutError`. Acceptable
+      (a timed-out socket is effectively a dropped connection); revisit if AR timeout specs
+      need the finer distinction. Server-side statement timeouts (`ER_QUERY_TIMEOUT 3024`,
+      `ER_QUERY_INTERRUPTED 1317`) come through as vendor codes and dispatch correctly.
+- [ ] Confirm `server_info[:version]` parses via Rails' `version_string` regex
+      `^(?:5\.5\.5-)?(\d+\.\d+\.\d+)` (MariaDB prefix). `mariadb?` keys off `full_version`
+      containing "mariadb". (Deferred — needs a MariaDB server to exercise.)
+- [ ] `warning_count` reflecting the **last** statement's warnings for `handle_warnings`
+      (only used when `ActiveRecord.db_warnings_action` is set — off by default, low priority).
+
+Known pre-existing (not P3): the invalid-UTF-8 error-message scrub uses `�` (U+FFFD) where
+mysql2 emits `?` — one `error_spec` encoding example fails on this, unrelated to error codes.
 
 ---
 

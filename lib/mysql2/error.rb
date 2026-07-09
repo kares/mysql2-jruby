@@ -35,7 +35,12 @@ module Mysql2
     end
 
     def self.new_with_args(msg, server_version, error_number, sql_state)
-      error_class = CODES.fetch(error_number, self)
+      # SQLSTATE class "08" is the SQL-standard connection-exception class (e.g. 08S01
+      # communications link failure, 08003 connection does not exist), which the JDBC
+      # driver reports with a vendor code of 0; route those to ConnectionError.
+      error_class = CODES[error_number]
+      error_class ||= ConnectionError if sql_state.to_s.start_with?('08')
+      error_class ||= self
       error_class.new(msg, server_version, error_number, sql_state)
     end
 
