@@ -31,6 +31,7 @@ public class Client extends RubyObject {
     private long lastId;
     private String queryInfoString; // mysql_info() of the last query, or null
     private long warningCount;      // server warnings from the last query
+    private com.mysql.cj.NativeSession nativeSession; // for runtime COM_SET_OPTION toggles
     private org.jcodings.Encoding clientEncoding = org.jcodings.specific.UTF8Encoding.INSTANCE;
 
     public Client(Ruby runtime, RubyClass klass) {
@@ -210,12 +211,47 @@ public class Client extends RubyObject {
         return context.runtime.newFixnum(warningCount);
     }
 
-    // mysql_set_server_option (COM_SET_OPTION). No public Connector/J API and no
-    // multi-statement query support, so this is a nil-returning no-op kept only
-    // for API compatibility (see #automatic_close=).
+    // mysql_set_server_option (COM_SET_OPTION). Rails brackets execute_batch with
+    // OPTION_MULTI_STATEMENTS_ON/OFF; Connector/J's NativeSession sends the identical
+    // wire message via enable/disableMultiQueries(). Returns true when the option is
+    // applied, false for anything we don't handle (matching mysql2's boolean result).
     @JRubyMethod(name = "set_server_option")
     public IRubyObject set_server_option(ThreadContext context, IRubyObject value) {
+        long opt = value.convertToInteger().getLongValue();
+        com.mysql.cj.NativeSession session = nativeSession();
+        if (session == null) return context.fals;
+        try {
+            if (opt == 0) {            // MYSQL_OPTION_MULTI_STATEMENTS_ON
+                session.enableMultiQueries();
+            } else if (opt == 1) {     // MYSQL_OPTION_MULTI_STATEMENTS_OFF
+                session.disableMultiQueries();
+            } else {
+                return context.fals;
+            }
+            return context.tru;
+        } catch (RuntimeException e) {
+            return context.fals;
+        }
+    }
+
+    // No-op: #query already closes its statement, which drains any pending results of a
+    // multi-statement (batch) query, so nothing lingers on the connection. Present because
+    // ActiveRecord calls it unconditionally after every query.
+    @JRubyMethod(name = "abandon_results!")
+    public IRubyObject abandon_results(ThreadContext context) {
         return context.nil;
+    }
+
+    /** Connector/J NativeSession for runtime COM_SET_OPTION toggles; cached, null if unavailable. */
+    private com.mysql.cj.NativeSession nativeSession() {
+        if (nativeSession == null && connection != null) {
+            try {
+                nativeSession = connection.unwrap(com.mysql.cj.jdbc.ConnectionImpl.class).getSession();
+            } catch (SQLException | RuntimeException ignore) {
+                // non-Connector/J driver, or a proxy that won't unwrap: leave null
+            }
+        }
+        return nativeSession;
     }
 
     // In mysql2 this prevents a forked child's GC from closing the parent's shared
