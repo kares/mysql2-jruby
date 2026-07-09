@@ -302,5 +302,33 @@ Rails' `activerecord/test` files boot on our gem — the stock `Mysql2Adapter` d
 | `adapters/mysql2/mysql2_rake_test.rb` | 26 runs, **0 failures** |
 | `adapters/mysql2/dbconsole_test.rb` | 4 runs, **0 failures** |
 
-`test_read_timeout_exception` drove the P3 `TimeoutError` fix above. Next: run the broader
-non-adapter `test/cases/**` suite (associations, migrations, types, transactions) and triage.
+`test_read_timeout_exception` drove the P3 `TimeoutError` fix above.
+
+**Results — broader `test/cases/**` slice (Rails 8.0.5, MySQL 8.0):**
+
+| test file | runs | outcome |
+|---|---:|---|
+| `adapter_test.rb` | 72 | all pass |
+| `quoting_test.rb` | 37 | all pass |
+| `calculations_test.rb` | 232 | all pass |
+| `persistence_test.rb` | 158 | all pass |
+| `finder_test.rb` | 263 | 261 pass; 2 unrelated¹ |
+| `migration_test.rb` | 84 | all pass |
+| `schema_dumper_test.rb` | 43 | all pass; 1 unrelated² |
+| `attribute_methods_test.rb` | 135 | all pass |
+| `binary_test.rb` | 3 | all pass (ASCII-8BIT round-trip) |
+| `date_time_precision_test.rb` | 11 | all pass (fractional-second DATETIME) |
+| `time_precision_test.rb` | 6 | all pass (TIME precision) |
+
+~1044 runs; **zero failures attributable to this gem**. The only non-passes:
+1. `finder_test`: `test_exists_with_large_number` / `test_find_by_bang_..._large_number` —
+   `ActiveModel::Type::Integer#ensure_in_range` raises `ActiveModel::RangeError` for values
+   past int8 during query-attribute serialization/`hash`, before the value reaches the
+   driver. An ActiveModel + JRuby integer-handling edge, adapter-independent.
+2. `schema_dumper_test`: one test hard-codes the `sqlite3` adapter, which isn't in this
+   bundle (arjdbc's harness adds `jdbc-sqlite3` for exactly these; not wired here).
+
+Data-type round-tripping (binary, DECIMAL, DATE/TIME/DATETIME with precision) — the heart of
+the byte-caster — passes cleanly through the real adapter. Next candidates: associations,
+transactions/isolation levels under concurrency, prepared-statement paths
+(`arunit_without_prepared_statements`), and JSON/enum column types.
