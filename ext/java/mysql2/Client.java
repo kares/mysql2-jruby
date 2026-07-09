@@ -31,6 +31,7 @@ public class Client extends RubyObject {
     private long lastId;
     private String queryInfoString; // mysql_info() of the last query, or null
     private long warningCount;      // server warnings from the last query
+    private org.jcodings.Encoding clientEncoding = org.jcodings.specific.UTF8Encoding.INSTANCE;
 
     public Client(Ruby runtime, RubyClass klass) {
         super(runtime, klass);
@@ -58,6 +59,7 @@ public class Client extends RubyObject {
         String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
 
         String encoding = orDefault(str(opt(context, opts, "encoding")), "utf8mb4");
+        this.clientEncoding = resolveEncoding(runtime, encoding);
 
         String url = "jdbc:mysql://" + host + ":" + port + "/" + database
                 + "?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8";
@@ -293,12 +295,52 @@ public class Client extends RubyObject {
     public IRubyObject server_info(ThreadContext context) {
         final Ruby runtime = context.runtime;
         try {
+            String version = connection.getMetaData().getDatabaseProductVersion();
             RubyHash info = RubyHash.newHash(runtime);
-            info.fastASet(runtime.newSymbol("version"), runtime.newString(connection.getMetaData().getDatabaseProductVersion()));
+            info.fastASet(runtime.newSymbol("id"), runtime.newFixnum(serverVersionId(version)));
+            // tag with the connection encoding, exported to Encoding.default_internal
+            info.fastASet(runtime.newSymbol("version"), encodedString(context, version));
             return info;
         } catch (SQLException e) {
             throw errorFromSQL(context, e);
         }
+    }
+
+    /** mysql_get_server_version() equivalent: major*10000 + minor*100 + patch. */
+    private static long serverVersionId(String version) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)").matcher(version);
+        if (!m.find()) return 0;
+        return Long.parseLong(m.group(1)) * 10000 + Long.parseLong(m.group(2)) * 100 + Long.parseLong(m.group(3));
+    }
+
+    /** Build a String tagged with the connection encoding, exported to default_internal. */
+    private IRubyObject encodedString(ThreadContext context, String s) {
+        Ruby runtime = context.runtime;
+        RubyString str = runtime.newString(new ByteList(
+                s.getBytes(java.nio.charset.StandardCharsets.UTF_8), clientEncoding, false));
+        org.jcodings.Encoding di = runtime.getDefaultInternalEncoding();
+        if (di != null && di != clientEncoding) {
+            return org.jruby.util.io.EncodingUtils.strConvEnc(context, str, clientEncoding, di);
+        }
+        return str;
+    }
+
+    private static org.jcodings.Encoding resolveEncoding(Ruby runtime, String mysqlCharset) {
+        String name;
+        switch (mysqlCharset.toLowerCase()) {
+            case "utf8": case "utf8mb4": case "utf8mb3": name = "UTF-8"; break;
+            case "ascii": case "us-ascii": name = "US-ASCII"; break;
+            case "binary": name = "ASCII-8BIT"; break;
+            case "latin1": name = "Windows-1252"; break;
+            default: name = mysqlCharset; break;
+        }
+        try {
+            org.jcodings.Encoding e = runtime.getEncodingService().getEncodingFromString(name);
+            if (e != null) return e;
+        } catch (RuntimeException ignore) {
+            // fall through
+        }
+        return org.jcodings.specific.UTF8Encoding.INSTANCE;
     }
 
     // Client library info. The "client" here is the JDBC driver (Connector/J),
