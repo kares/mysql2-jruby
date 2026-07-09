@@ -231,12 +231,14 @@ failures only.
       `Mysql2::Error::ConnectionError`. Verified: a `KILL`ed connection and a query on a
       closed connection both raise `ConnectionError` with `error_number == nil`, so
       mysql2_adapter's `is_a?(::Mysql2::Error::ConnectionError)` branch → `ConnectionFailed`.
-- [ ] `Error::TimeoutError` for a client-side `read_timeout`: mysql2 raises `TimeoutError`
-      (nil errno → AR `AdapterTimeout`). A JDBC `socketTimeout` currently surfaces as a `08`
-      `CommunicationsException` → routed to `ConnectionError`, not `TimeoutError`. Acceptable
-      (a timed-out socket is effectively a dropped connection); revisit if AR timeout specs
-      need the finer distinction. Server-side statement timeouts (`ER_QUERY_TIMEOUT 3024`,
-      `ER_QUERY_INTERRUPTED 1317`) come through as vendor codes and dispatch correctly.
+- [x] `Error::TimeoutError` for a client-side `read_timeout` — a JDBC `socketTimeout` throws a
+      `CommunicationsException` wrapping `java.net.SocketTimeoutException`; `errorFromSQL`
+      detects that in the cause chain and raises `Mysql2::Error::TimeoutError` (nil errno), so
+      AR's `mysql2_adapter#translate_exception` maps it to `AdapterTimeout`. A genuine dropped
+      connection (KILL, closed socket) has no `SocketTimeoutException` and still routes to
+      `ConnectionError`. Confirmed by AR's own `test_read_timeout_exception`. Server-side
+      statement timeouts (`ER_QUERY_TIMEOUT 3024`, `ER_QUERY_INTERRUPTED 1317`) come through as
+      vendor codes and dispatch correctly.
 - [ ] Confirm `server_info[:version]` parses via Rails' `version_string` regex
       `^(?:5\.5\.5-)?(\d+\.\d+\.\d+)` (MariaDB prefix). `mariadb?` keys off `full_version`
       containing "mariadb". (Deferred — needs a MariaDB server to exercise.)
@@ -269,3 +271,36 @@ mysql2 emits `?` — one `error_spec` encoding example fails on this, unrelated 
 
 Once P0–P1 land, the next concrete milestone is running ActiveRecord's own MySQL test
 suite (`activerecord/test` with `ARCONN=mysql2`) and triaging from there.
+
+---
+
+## 8. Running ActiveRecord's own test suite (JRuby)
+
+Rails' `activerecord/test` files boot on our gem — the stock `Mysql2Adapter` drives our
+`Mysql2::Client` unchanged. The harness (kept under `prototype/ar/`, git-ignored):
+
+- **Bundle**: Rails' own `Gemfile` excludes `mysql2`/`pg`/`trilogy` on JRuby and its lockfile
+  lacks the `java` platform, so it can't drive these tests directly. Instead we reuse
+  **activerecord-jdbc-adapter's** `Gemfile` (`../activerecord-jdbc-adapter`), which pulls Rails
+  from the local clone via `ENV['RAILS']` and resolves the test-support gems (minitest 6,
+  mocha, minitest-excludes, zeitwerk, railties, …) on JRuby. `bundle install` into a writable
+  `BUNDLE_PATH` (needs network once).
+- **Adapter on our gem**: run with `-rbundler/setup -r prototype/ar/bundled_harness.rb`, which
+  prepends our `lib` and stubs the adapter's `gem "mysql2"` activation (our gem is required
+  from source, not installed). Model after arjdbc's `rakelib/rails.rake` `rails:test_mysql`.
+- **Config / env**: `ARCONN=mysql2`, `ARCONFIG=prototype/ar/config.yml` (points at
+  127.0.0.1:13306), `N=0` (minitest parallel crashes on JRuby), `CLASSPATH=<connector-j jar>`.
+  Databases `activerecord_unittest` / `activerecord_unittest2` + a `rails` user must exist.
+- Runner: `prototype/ar/run_test.sh <test/cases/.../foo_test.rb>`.
+
+**Results — mysql2-specific adapter tests (Rails 8.0.5, MySQL 8.0): 55/55 passing.**
+
+| test file | result |
+|---|---|
+| `adapters/mysql2/mysql2_adapter_test.rb` | 24 runs, 64 assertions, **0 failures** |
+| `adapters/mysql2/check_constraint_quoting_test.rb` | 1 run, **0 failures** |
+| `adapters/mysql2/mysql2_rake_test.rb` | 26 runs, **0 failures** |
+| `adapters/mysql2/dbconsole_test.rb` | 4 runs, **0 failures** |
+
+`test_read_timeout_exception` drove the P3 `TimeoutError` fix above. Next: run the broader
+non-adapter `test/cases/**` suite (associations, migrations, types, transactions) and triage.

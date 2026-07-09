@@ -632,10 +632,30 @@ public class Client extends RubyObject {
         int code = e.getErrorCode();
         IRubyObject errno = code == 0 ? runtime.getNil() : runtime.newFixnum(code);
         IRubyObject sqlState = e.getSQLState() == null ? runtime.getNil() : runtime.newString(e.getSQLState());
+        IRubyObject msg = runtime.newString(e.getMessage() == null ? "" : e.getMessage());
+
+        // A read_timeout (JDBC socketTimeout) throws a CommunicationsException wrapping a
+        // java.net.SocketTimeoutException. mysql2 surfaces this as Mysql2::Error::TimeoutError
+        // (with nil errno), which ActiveRecord maps to AdapterTimeout; the generic 08-state
+        // routing would otherwise mislabel it as a connection failure.
+        if (isSocketTimeout(e)) {
+            RubyClass timeout = (RubyClass) errorClass(runtime).getConstant("TimeoutError");
+            RubyException exc = (RubyException) timeout.callMethod(context, "new",
+                    new IRubyObject[]{msg, runtime.getNil(), runtime.getNil(), sqlState});
+            return exc.toThrowable();
+        }
+
         RubyException exc = (RubyException) errorClass(runtime).callMethod(context, "new_with_args",
-                new IRubyObject[]{runtime.newString(e.getMessage() == null ? "" : e.getMessage()),
-                        runtime.getNil(), errno, sqlState});
+                new IRubyObject[]{msg, runtime.getNil(), errno, sqlState});
         return exc.toThrowable();
+    }
+
+    private static boolean isSocketTimeout(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c instanceof java.net.SocketTimeoutException) return true;
+            if (c == c.getCause()) break;
+        }
+        return false;
     }
 
     /** Option value by any of the given symbol/string keys. */
