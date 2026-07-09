@@ -31,7 +31,6 @@ public class Client extends RubyObject {
     private long lastId;
     private String queryInfoString; // mysql_info() of the last query, or null
     private long warningCount;      // server warnings from the last query
-    private boolean automaticClose = true;
 
     public Client(Ruby runtime, RubyClass klass) {
         super(runtime, klass);
@@ -59,8 +58,6 @@ public class Client extends RubyObject {
         String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
 
         String encoding = orDefault(str(opt(context, opts, "encoding")), "utf8mb4");
-        IRubyObject ac = opt(context, opts, "automatic_close");
-        this.automaticClose = ac.isNil() ? true : ac.isTrue();
 
         String url = "jdbc:mysql://" + host + ":" + port + "/" + database
                 + "?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8";
@@ -211,16 +208,16 @@ public class Client extends RubyObject {
         return context.runtime.newFixnum(warningCount);
     }
 
-    // Controls whether the connection is auto-closed on GC/fork. JDBC/Connector-J
-    // manages connection lifetime, so this is a stored flag honored on close.
+    // In mysql2 this prevents a forked child's GC from closing the parent's shared
+    // MySQL socket. JRuby has no fork and there is no JDBC analog, so the getter
+    // reports nil (unsupported) and the setter is a no-op; #close always closes.
     @JRubyMethod(name = "automatic_close?")
     public IRubyObject automatic_close_p(ThreadContext context) {
-        return context.runtime.newBoolean(automaticClose);
+        return context.nil;
     }
 
     @JRubyMethod(name = "automatic_close=")
     public IRubyObject set_automatic_close(ThreadContext context, IRubyObject value) {
-        this.automaticClose = value.isTrue();
         return value;
     }
 
