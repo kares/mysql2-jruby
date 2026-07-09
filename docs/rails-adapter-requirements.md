@@ -342,5 +342,15 @@ Rails' default for mysql2 is unprepared, but the prepared path
 (`raw_connection.prepare(sql)` → `stmt.execute(*binds)` → `stmt.affected_rows` → `stmt.close`,
 backed by our client-side JDBC `PreparedStatement` reusing the text-protocol byte caster)
 works: `persistence_test` **158/158** and `finder_test` 261/263 (same two adapter-independent
-int-range edges as unprepared), `prepared_statement_status_test` 1/1. Next candidates:
-associations and JSON/enum column types.
+int-range edges as unprepared), `prepared_statement_status_test` 1/1.
+
+**JSON / enum column types:**
+- `adapters/abstract_mysql_adapter/json_test.rb` (native MySQL `JSON` column, incl.
+  `JSONSharedTestCases`) — **25/25**. Validates the byte-caster on `JSON` columns end-to-end.
+- `json_attribute_test.rb` — **25/25**.
+- `enum_test.rb` — 95/97. The two failures assert a specific enum-scope-clash *warning string*
+  appears in the captured log; our harness routes `ActiveRecord::Base.logger` to `debug.log`
+  (per AR's `connect`), so the capture is empty. Log-assertion only, adapter-independent; all
+  enum data operations pass.
+
+Next candidates: associations, and (lower priority) SSL/socket connection options.
