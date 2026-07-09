@@ -31,6 +31,7 @@ public class Client extends RubyObject {
     private long lastId;
     private String queryInfoString; // mysql_info() of the last query, or null
     private long warningCount;      // server warnings from the last query
+    private int readTimeoutSeconds = -1; // configured :read_timeout, or -1 if unset
     private com.mysql.cj.NativeSession nativeSession; // for runtime COM_SET_OPTION toggles
     private org.jcodings.Encoding clientEncoding = org.jcodings.specific.UTF8Encoding.INSTANCE;
 
@@ -62,20 +63,74 @@ public class Client extends RubyObject {
         String encoding = orDefault(str(opt(context, opts, "encoding")), "utf8mb4");
         this.clientEncoding = resolveEncoding(runtime, encoding);
 
-        String url = "jdbc:mysql://" + host + ":" + port + "/" + database
-                + "?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8";
+        // JDBC connection properties. SSL is deliberately left off for now (useSSL=false);
+        // timeouts are seconds in mysql2 but milliseconds in JDBC.
+        StringBuilder url = new StringBuilder("jdbc:mysql://").append(host).append(':').append(port)
+                .append('/').append(database)
+                .append("?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8");
+        Integer connectTimeout = intOpt(context, opts, "connect_timeout");
+        if (connectTimeout != null) url.append("&connectTimeout=").append(connectTimeout * 1000L);
+        Integer readTimeout = intOpt(context, opts, "read_timeout");
+        if (readTimeout != null) {
+            this.readTimeoutSeconds = readTimeout;
+            url.append("&socketTimeout=").append(readTimeout * 1000L);
+        }
+        if (truthy(opt(context, opts, "reconnect"), false)) url.append("&autoReconnect=true");
+        if (truthy(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
+
+        String initCommand = str(opt(context, opts, "init_command"));
+        boolean multiStatements = multiStatementsRequested(context, opts);
+
         try {
-            this.connection = DriverManager.getConnection(url, user, pass);
+            this.connection = DriverManager.getConnection(url.toString(), user, pass);
             // Make result strings come back in the client encoding (like mysql2's
             // character_set_results), so field metadata reports that charset and
             // getBytes() yields bytes we can tag correctly.
             try (Statement s = connection.createStatement()) {
                 s.execute("SET character_set_results = " + sanitizeCharset(encoding));
             }
+            // flags: [MULTI_STATEMENTS] means "always on"; ActiveRecord then skips the
+            // per-batch set_server_option toggle, so enable it for the whole connection.
+            if (multiStatements) {
+                com.mysql.cj.NativeSession session = nativeSession();
+                if (session != null) session.enableMultiQueries();
+            }
+            if (initCommand != null) {
+                try (Statement s = connection.createStatement()) { s.execute(initCommand); }
+            }
         } catch (SQLException e) {
             throw errorFromSQL(context, e);
         }
         return context.nil;
+    }
+
+    /** :flags may be an Integer bitmask or an Array of flag names; detect MULTI_STATEMENTS. */
+    private static boolean multiStatementsRequested(ThreadContext context, RubyHash opts) {
+        final long MULTI_STATEMENTS = 65536;
+        IRubyObject flags = opt(context, opts, "flags");
+        if (flags == null || flags.isNil()) return false;
+        if (flags instanceof org.jruby.RubyArray) {
+            for (IRubyObject e : ((org.jruby.RubyArray<?>) flags).toJavaArray()) {
+                if (e != null && !e.isNil() && "MULTI_STATEMENTS".equals(e.asJavaString())) return true;
+            }
+            return false;
+        }
+        if (flags instanceof org.jruby.RubyInteger) {
+            return (((org.jruby.RubyInteger) flags).getLongValue() & MULTI_STATEMENTS) != 0;
+        }
+        return false;
+    }
+
+    /** Integer option (seconds/count), or null when absent or non-numeric. */
+    private static Integer intOpt(ThreadContext context, RubyHash opts, String... names) {
+        IRubyObject v = opt(context, opts, names);
+        if (v == null || v.isNil()) return null;
+        if (v instanceof org.jruby.RubyInteger) return (int) ((org.jruby.RubyInteger) v).getLongValue();
+        try {
+            return (int) v.convertToInteger().getLongValue();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     @JRubyMethod
@@ -203,7 +258,7 @@ public class Client extends RubyObject {
 
     @JRubyMethod(name = "read_timeout")
     public IRubyObject read_timeout(ThreadContext context) {
-        return context.nil;
+        return readTimeoutSeconds < 0 ? context.nil : context.runtime.newFixnum(readTimeoutSeconds);
     }
 
     @JRubyMethod(name = "warning_count")

@@ -101,22 +101,30 @@ path is `Client#query`, not `Statement`. Prepared path is exercised when a user 
       closes its statement (draining pending multi-results), so nothing lingers.
 
 ### P1 — connection options Rails passes and expects honored
-- [ ] **`flags` handling** in `Client#initialize`: accept Integer bitmask **or** Array of
-      String names (`@config[:flags]` may be either — mysql2_adapter:61). At minimum don't
-      choke; ideally map:
-  - `FOUND_ROWS` → JDBC `useAffectedRows=false` (Connector/J default already sends
-    `CLIENT_FOUND_ROWS`; confirm and keep it so UPDATE returns matched rows — Rails relies
-    on this).
-  - `MULTI_STATEMENTS` → `allowMultiQueries=true` (needed for the batch path, §4/P2).
-- [ ] **`socket:`** → JDBC unix-socket / named-pipe (or document unsupported).
-- [ ] **timeouts**: `connect_timeout` → `connectTimeout`, `read_timeout` →
-      `socketTimeout`, `write_timeout`.
-- [ ] **`init_command:`** → run once after connect (`connectionAttributes` / explicit query).
-- [ ] **SSL**: `ssl_mode` + `sslca/sslcert/sslkey/sslcapath/sslcipher`. `ssl_mode` values
-      map to Connector/J `sslMode` (DISABLED/PREFERRED/REQUIRED/VERIFY_CA/VERIFY_IDENTITY).
-- [ ] **`reconnect:`** → JDBC `autoReconnect` (or leave to AR's own reconnect logic).
-- [ ] `default_file:` / `default_group:` — mysql option-file support (likely **unsupported**;
-      document and ignore rather than crash).
+Done (`Client#initialize`, verified with `prototype/options_smoke.rb`):
+- [x] **`flags` handling** — accepts Integer bitmask **or** Array of String names
+      (`@config[:flags]` may be either — mysql2_adapter:61). `MULTI_STATEMENTS` (bit
+      `65536` / `"MULTI_STATEMENTS"`) enables multi-queries once at connect
+      (`NativeSession.enableMultiQueries()`), so ActiveRecord's skip-toggle path works.
+      Other capability flags are left to the driver.
+- [x] **`FOUND_ROWS`** — already satisfied: Connector/J's default `useAffectedRows=false`
+      sends `CLIENT_FOUND_ROWS`, so UPDATE returns matched rows as Rails expects. No action
+      needed (we don't set `useAffectedRows`).
+- [x] **timeouts**: `connect_timeout` → `connectTimeout`, `read_timeout` → `socketTimeout`
+      (mysql2 seconds → JDBC ms). `read_timeout` is also stored and reported by the accessor.
+      `write_timeout` has no JDBC analog → ignored.
+- [x] **`init_command:`** — executed once after connect.
+- [x] **`reconnect:`** → JDBC `autoReconnect=true`.
+- [x] **`local_infile:`** → JDBC `allowLoadLocalInfile=true`.
+- [x] Unknown AR config keys (`adapter`, `pool`, `checkout_timeout`, …) are tolerated.
+
+Deferred:
+- [ ] **SSL**: `ssl_mode` + `sslca/sslcert/sslkey/sslcapath/sslcipher` → Connector/J `sslMode`
+      (DISABLED/PREFERRED/REQUIRED/VERIFY_CA/VERIFY_IDENTITY). Currently `useSSL=false` always.
+- [ ] **`socket:`** → unix-socket connect. Connector/J 8+ has no built-in unix-socket support
+      (needs a third-party socket factory); TCP is used regardless. Document/handle later.
+- [ ] `default_file:` / `default_group:` — mysql option-file support (**unsupported** in JDBC;
+      ignored rather than crashing).
 
 ### P2 — batch / multi-statement — **path validated, ready to implement**
 `execute_batch` (mysql2/database_statements.rb:17) combines statements with `;\n` into one
