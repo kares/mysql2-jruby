@@ -6,15 +6,19 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Iterator;
 
 import org.jruby.Ruby;
+import org.jruby.RubyArray;
 import org.jruby.RubyClass;
 import org.jruby.RubyException;
 import org.jruby.RubyHash;
+import org.jruby.RubyInteger;
 import org.jruby.RubyObject;
 import org.jruby.RubyString;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.exceptions.RaiseException;
+import org.jruby.runtime.Block;
 import org.jruby.runtime.ObjectAllocator;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.Visibility;
@@ -32,8 +36,9 @@ public class Client extends RubyObject {
     private String queryInfoString; // mysql_info() of the last query, or null
     private long warningCount;      // server warnings from the last query
     private int readTimeoutSeconds = -1; // configured :read_timeout, or -1 if unset
-    private com.mysql.cj.NativeSession nativeSession; // for runtime COM_SET_OPTION toggles
     private org.jcodings.Encoding clientEncoding = org.jcodings.specific.UTF8Encoding.INSTANCE;
+
+    transient com.mysql.cj.NativeSession nativeSession; // for runtime COM_SET_OPTION toggles
 
     public Client(Ruby runtime, RubyClass klass) {
         super(runtime, klass);
@@ -50,13 +55,13 @@ public class Client extends RubyObject {
         }
         RubyHash opts = optsArg.isNil() ? RubyHash.newHash(runtime) : (RubyHash) optsArg;
 
-        this.queryOptions = (RubyHash) defaultQueryOptions(context, getMetaClass()).dup(context);
-        this.queryOptions.callMethod(context, "merge!", opts);
+        this.queryOptions = defaultQueryOptions(context, getMetaClass())
+                .merge(context, new IRubyObject[] { opts }, Block.NULL_BLOCK);
 
         String user = str(opt(context, opts, "username", "user"));
         String pass = str(opt(context, opts, "password", "pass"));
         String host = orDefault(str(opt(context, opts, "host", "hostname")), "localhost");
-        IRubyObject portObj = opt(context, opts, "port", null);
+        IRubyObject portObj = opt(context, opts, "port");
         int port = portObj.isNil() ? 3306 : (int) portObj.convertToInteger().getLongValue();
         String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
 
@@ -75,13 +80,12 @@ public class Client extends RubyObject {
             this.readTimeoutSeconds = readTimeout;
             url.append("&socketTimeout=").append(readTimeout * 1000L);
         }
-        if (truthy(opt(context, opts, "reconnect"), false)) url.append("&autoReconnect=true");
-        if (truthy(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
+        if (bool(opt(context, opts, "reconnect"), false)) url.append("&autoReconnect=true");
+        if (bool(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
 
         String initCommand = str(opt(context, opts, "init_command"));
-        boolean multiStatements = multiStatementsRequested(context, opts);
 
-        try {
+        try { // TODO avoid DriverManager usage
             this.connection = DriverManager.getConnection(url.toString(), user, pass);
             // Make result strings come back in the client encoding (like mysql2's
             // character_set_results), so field metadata reports that charset and
@@ -91,7 +95,7 @@ public class Client extends RubyObject {
             }
             // flags: [MULTI_STATEMENTS] means "always on"; ActiveRecord then skips the
             // per-batch set_server_option toggle, so enable it for the whole connection.
-            if (multiStatements) {
+            if (isMultiStatements(context, opts)) {
                 com.mysql.cj.NativeSession session = nativeSession();
                 if (session != null) session.enableMultiQueries();
             }
@@ -105,18 +109,20 @@ public class Client extends RubyObject {
     }
 
     /** :flags may be an Integer bitmask or an Array of flag names; detect MULTI_STATEMENTS. */
-    private static boolean multiStatementsRequested(ThreadContext context, RubyHash opts) {
+    private static boolean isMultiStatements(ThreadContext context, RubyHash opts) {
         final long MULTI_STATEMENTS = 65536;
+
         IRubyObject flags = opt(context, opts, "flags");
         if (flags == null || flags.isNil()) return false;
-        if (flags instanceof org.jruby.RubyArray) {
-            for (IRubyObject e : ((org.jruby.RubyArray<?>) flags).toJavaArray()) {
+        if (flags instanceof RubyArray<?>) {
+            for (Iterator<IRubyObject> it = ((RubyArray<?>) flags).rubyStream().iterator(); it.hasNext(); ) {
+                IRubyObject e = it.next();
                 if (e != null && !e.isNil() && "MULTI_STATEMENTS".equals(e.asJavaString())) return true;
             }
             return false;
         }
-        if (flags instanceof org.jruby.RubyInteger) {
-            return (((org.jruby.RubyInteger) flags).getLongValue() & MULTI_STATEMENTS) != 0;
+        if (flags instanceof RubyInteger) {
+            return (((RubyInteger) flags).getLongValue() & MULTI_STATEMENTS) != 0;
         }
         return false;
     }
@@ -125,9 +131,9 @@ public class Client extends RubyObject {
     private static Integer intOpt(ThreadContext context, RubyHash opts, String... names) {
         IRubyObject v = opt(context, opts, names);
         if (v == null || v.isNil()) return null;
-        if (v instanceof org.jruby.RubyInteger) return (int) ((org.jruby.RubyInteger) v).getLongValue();
+        if (v instanceof RubyInteger) return (int) ((org.jruby.RubyInteger) v).getLongValue();
         try {
-            return (int) v.convertToInteger().getLongValue();
+            return v.convertToInteger().getIntValue();
         } catch (RuntimeException e) {
             return null;
         }
@@ -211,14 +217,14 @@ public class Client extends RubyObject {
         RowReader reader = new RowReader(
                 runtime, resultSet,
                 "array".equals(str(hash(context, merged, "as"))),
-                truthy(hash(context, merged, "cast"), true),
-                truthy(hash(context, merged, "cast_booleans"), false),
-                truthy(hash(context, merged, "symbolize_keys"), false),
+                bool(hash(context, merged, "cast"), true),
+                bool(hash(context, merged, "cast_booleans"), false),
+                bool(hash(context, merged, "symbolize_keys"), false),
                 orDefault(str(hash(context, merged, "database_timezone")), "local"),
                 str(hash(context, merged, "application_timezone")),
                 errorClass(runtime),
                 localOffset(context, getMetaClass()));
-        boolean cacheRows = truthy(hash(context, merged, "cache_rows"), true);
+        boolean cacheRows = bool(hash(context, merged, "cache_rows"), true);
         RubyClass resultClass = runtime.getModule("Mysql2").getClass("Result");
         return new Result(runtime, resultClass, resultSet, stmtToClose, reader, cacheRows);
     }
@@ -309,9 +315,7 @@ public class Client extends RubyObject {
         return nativeSession;
     }
 
-    // In mysql2 this prevents a forked child's GC from closing the parent's shared
-    // MySQL socket. JRuby has no fork and there is no JDBC analog, so the getter
-    // reports nil (unsupported) and the setter is a no-op; #close always closes.
+    // in mysql2 prevents a forked child's GC from closing parent's shared MySQL socket
     @JRubyMethod(name = "automatic_close?")
     public IRubyObject automatic_close_p(ThreadContext context) {
         return context.nil;
@@ -319,7 +323,7 @@ public class Client extends RubyObject {
 
     @JRubyMethod(name = "automatic_close=")
     public IRubyObject set_automatic_close(ThreadContext context, IRubyObject value) {
-        return value;
+        return context.nil;
     }
 
     private static long countWarnings(Statement stmt) {
@@ -658,39 +662,47 @@ public class Client extends RubyObject {
         return false;
     }
 
-    /** Option value by any of the given symbol/string keys. */
+    static IRubyObject opt(ThreadContext context, RubyHash opts, String name) {
+        IRubyObject v = optInternal(context.runtime, opts, name);
+        return v == null ? context.nil : v;
+    }
+
     static IRubyObject opt(ThreadContext context, RubyHash opts, String... names) {
-        Ruby runtime = context.runtime;
         for (String name : names) {
-            if (name == null) continue;
-            // A present key wins even if its value is nil (e.g. database: nil
-            // overriding a string "database" key), matching mysql2's symbolized opts.
-            IRubyObject v = opts.fastARef(runtime.newSymbol(name));
-            if (v == null) v = opts.fastARef(runtime.newString(name));
+            IRubyObject v = optInternal(context.runtime, opts, name);
             if (v != null) return v;
         }
         return context.nil;
+    }
+
+    /** Option value by any of the given symbol/string keys. */
+    private static IRubyObject optInternal(Ruby runtime, RubyHash opts, String name) {
+        // a present key wins even if its value is nil (e.g. database: nil
+        // overriding a string "database" key) - matches mysql2's symbolized opts
+        IRubyObject v = opts.fastARef(runtime.newSymbol(name));
+        if (v == null) v = opts.fastARef(runtime.newString(name));
+        return v;
     }
 
     static IRubyObject hash(ThreadContext context, RubyHash h, String symKey) {
         return h.op_aref(context, context.runtime.newSymbol(symKey));
     }
 
-    static String str(IRubyObject v) {
-        return (v == null || v.isNil()) ? null : v.asJavaString();
+    static String str(IRubyObject val) {
+        return (val == null || val.isNil()) ? null : val.asJavaString();
+    }
+
+    static String orDefault(String val, String defaultVal) {
+        return val == null ? defaultVal : val;
+    }
+
+    static boolean bool(IRubyObject val, boolean defaultVal) {
+        return (val == null || val.isNil()) ? defaultVal : val.isTrue();
     }
 
     /** Whitelist a charset name for safe interpolation into SET character_set_results. */
     private static String sanitizeCharset(String name) {
         if (name == null || !name.matches("[A-Za-z0-9_]+")) return "utf8mb4";
         return name;
-    }
-
-    static String orDefault(String v, String dflt) {
-        return v == null ? dflt : v;
-    }
-
-    static boolean truthy(IRubyObject v, boolean dflt) {
-        return (v == null || v.isNil()) ? dflt : v.isTrue();
     }
 }
