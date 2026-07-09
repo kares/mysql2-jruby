@@ -319,8 +319,12 @@ Rails' `activerecord/test` files boot on our gem — the stock `Mysql2Adapter` d
 | `binary_test.rb` | 3 | all pass (ASCII-8BIT round-trip) |
 | `date_time_precision_test.rb` | 11 | all pass (fractional-second DATETIME) |
 | `time_precision_test.rb` | 6 | all pass (TIME precision) |
+| `transactions_test.rb` | 104 | all pass (nested tx, savepoints, rollback) |
+| `transaction_isolation_test.rb` | 6 | all pass (exercises the P2 `SET TRANSACTION …; BEGIN` batch path) |
+| `transaction_callbacks_test.rb` | 57 | all pass |
+| `transaction_instrumentation_test.rb` | 21 | all pass |
 
-~1044 runs; **zero failures attributable to this gem**. The only non-passes:
+~1232 runs; **zero failures attributable to this gem**. The only non-passes:
 1. `finder_test`: `test_exists_with_large_number` / `test_find_by_bang_..._large_number` —
    `ActiveModel::Type::Integer#ensure_in_range` raises `ActiveModel::RangeError` for values
    past int8 during query-attribute serialization/`hash`, before the value reaches the
@@ -329,6 +333,7 @@ Rails' `activerecord/test` files boot on our gem — the stock `Mysql2Adapter` d
    bundle (arjdbc's harness adds `jdbc-sqlite3` for exactly these; not wired here).
 
 Data-type round-tripping (binary, DECIMAL, DATE/TIME/DATETIME with precision) — the heart of
-the byte-caster — passes cleanly through the real adapter. Next candidates: associations,
-transactions/isolation levels under concurrency, prepared-statement paths
+the byte-caster — passes cleanly through the real adapter. The transaction-isolation tests
+exercise the P2 multi-statement batch path (`SET TRANSACTION …; BEGIN` via
+`enableMultiQueries()`) end-to-end. Next candidates: associations, prepared-statement paths
 (`arunit_without_prepared_statements`), and JSON/enum column types.
