@@ -335,5 +335,12 @@ Rails' `activerecord/test` files boot on our gem — the stock `Mysql2Adapter` d
 Data-type round-tripping (binary, DECIMAL, DATE/TIME/DATETIME with precision) — the heart of
 the byte-caster — passes cleanly through the real adapter. The transaction-isolation tests
 exercise the P2 multi-statement batch path (`SET TRANSACTION …; BEGIN` via
-`enableMultiQueries()`) end-to-end. Next candidates: associations, prepared-statement paths
-(`arunit_without_prepared_statements`), and JSON/enum column types.
+`enableMultiQueries()`) end-to-end.
+
+**Prepared-statement path** (`prepared_statements: true`, `prototype/ar/config_prepared.yml`):
+Rails' default for mysql2 is unprepared, but the prepared path
+(`raw_connection.prepare(sql)` → `stmt.execute(*binds)` → `stmt.affected_rows` → `stmt.close`,
+backed by our client-side JDBC `PreparedStatement` reusing the text-protocol byte caster)
+works: `persistence_test` **158/158** and `finder_test` 261/263 (same two adapter-independent
+int-range edges as unprepared), `prepared_statement_status_test` 1/1. Next candidates:
+associations and JSON/enum column types.
