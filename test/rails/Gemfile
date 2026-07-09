@@ -1,0 +1,32 @@
+# Bundle for running Rails' own ActiveRecord test suite against this gem.
+# Point ENV['RAILS'] at a Rails checkout (activerecord/ lives under it); the Rails
+# gems load from that clone, the rest are the test-support gems AR's suite needs.
+#
+#   RAILS=../rails bundle install --gemfile=test/rails/Gemfile
+#   RAILS=../rails rake rails:test
+source "https://rubygems.org"
+
+rails_dir = ENV["RAILS"] or raise "set ENV['RAILS'] to a Rails checkout"
+%w[activerecord activemodel activesupport actionpack actionview].each do |name|
+  gem name, require: false, path: File.join(rails_dir, name)
+end
+# NB: railties is intentionally NOT a bundled gem (it drags irb/rdoc/rbs, which need a
+# native build). Its lib is added to the load path by test/rails/harness.rb instead —
+# minitest 6 autoloads railties/lib/minitest/rails_plugin.rb.
+
+gem "rake", require: nil
+
+group :test do
+  gem "mocha", "~> 2.0", require: false
+  gem "minitest-mock", require: false # minitest 6 split mock into its own gem
+  gem "bcrypt", "~> 3.1", require: false
+  gem "ostruct", require: false
+
+  # Rails test-support gems
+  gem "builder", require: nil
+  gem "erubis", require: nil
+  gem "msgpack", "~> 1.7", require: false
+  gem "rack", require: nil
+  gem "zeitwerk"
+  gem "minitest-excludes", require: nil
+end

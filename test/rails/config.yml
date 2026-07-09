@@ -1,0 +1,29 @@
+# ActiveRecord test-suite connection config (ARCONFIG) for the mysql2 adapter
+# backed by this gem. Host/port/credentials are ENV-overridable so the same file
+# works against any MySQL. Databases activerecord_unittest{,2} and the user must
+# exist (see `rake rails:db:build`).
+default_connection: mysql2
+
+connections:
+  mysql2:
+    arunit:
+      host: <%= ENV["MYSQL_HOST"] || "127.0.0.1" %>
+      port: <%= ENV["MYSQL_PORT"] || 13306 %>
+      username: <%= ENV["MYSQL_USER"] || "root" %>
+      password: <%= ENV["MYSQL_PASSWORD"] || "root" %>
+      encoding: utf8mb4
+      prepared_statements: <%= ENV["AR_PREPARED_STATEMENTS"] == "true" %>
+    arunit2:
+      host: <%= ENV["MYSQL_HOST"] || "127.0.0.1" %>
+      port: <%= ENV["MYSQL_PORT"] || 13306 %>
+      username: <%= ENV["MYSQL_USER"] || "root" %>
+      password: <%= ENV["MYSQL_PASSWORD"] || "root" %>
+      encoding: utf8mb4
+      prepared_statements: <%= ENV["AR_PREPARED_STATEMENTS"] == "true" %>
+    arunit_without_prepared_statements:
+      host: <%= ENV["MYSQL_HOST"] || "127.0.0.1" %>
+      port: <%= ENV["MYSQL_PORT"] || 13306 %>
+      username: <%= ENV["MYSQL_USER"] || "root" %>
+      password: <%= ENV["MYSQL_PASSWORD"] || "root" %>
+      encoding: utf8mb4
+      prepared_statements: false

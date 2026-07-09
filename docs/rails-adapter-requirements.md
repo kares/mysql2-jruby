@@ -277,21 +277,33 @@ suite (`activerecord/test` with `ARCONN=mysql2`) and triaging from there.
 ## 8. Running ActiveRecord's own test suite (JRuby)
 
 Rails' `activerecord/test` files boot on our gem — the stock `Mysql2Adapter` drives our
-`Mysql2::Client` unchanged. The harness (kept under `prototype/ar/`, git-ignored):
+`Mysql2::Client` unchanged. This is wired up as a rake target (`rake rails:*`, modeled on
+activerecord-jdbc-adapter's `rakelib/rails.rake`); the supporting files live under
+`test/rails/`:
 
-- **Bundle**: Rails' own `Gemfile` excludes `mysql2`/`pg`/`trilogy` on JRuby and its lockfile
-  lacks the `java` platform, so it can't drive these tests directly. Instead we reuse
-  **activerecord-jdbc-adapter's** `Gemfile` (`../activerecord-jdbc-adapter`), which pulls Rails
-  from the local clone via `ENV['RAILS']` and resolves the test-support gems (minitest 6,
-  mocha, minitest-excludes, zeitwerk, railties, …) on JRuby. `bundle install` into a writable
-  `BUNDLE_PATH` (needs network once).
-- **Adapter on our gem**: run with `-rbundler/setup -r prototype/ar/bundled_harness.rb`, which
+```sh
+export RAILS=../rails                      # a Rails checkout (activerecord/ lives under it)
+rake rails:bundle                          # one-time: install test-support gems (network)
+rake rails:db:build                        # create activerecord_unittest{,2} + user
+rake rails:test                            # full suite (adapters/* limited to mysql2)
+rake rails:test TEST=test/cases/transactions_test.rb   # one file / comma-separated list
+AR_PREPARED_STATEMENTS=true rake rails:test TEST=...    # prepared-statement path
+```
+
+How it fits together:
+- **Bundle** (`test/rails/Gemfile`): Rails' own `Gemfile` excludes `mysql2`/`pg`/`trilogy` on
+  JRuby and its lockfile lacks the `java` platform, so it can't drive these tests. Ours pulls
+  the Rails gems from the `ENV['RAILS']` clone via `path:` and adds the test-support gems
+  (mocha, minitest-mock, bcrypt, zeitwerk, rack, …). `railties` is deliberately *not* bundled
+  (it drags `irb`/`rdoc`/`rbs`, which need a native build) — its `lib` is added to the load
+  path by the harness so minitest 6 can autoload `railties/lib/minitest/rails_plugin.rb`.
+- **Adapter on our gem** (`test/rails/harness.rb`, loaded via `-rbundler/setup -r harness`):
   prepends our `lib` and stubs the adapter's `gem "mysql2"` activation (our gem is required
-  from source, not installed). Model after arjdbc's `rakelib/rails.rake` `rails:test_mysql`.
-- **Config / env**: `ARCONN=mysql2`, `ARCONFIG=prototype/ar/config.yml` (points at
-  127.0.0.1:13306), `N=0` (minitest parallel crashes on JRuby), `CLASSPATH=<connector-j jar>`.
-  Databases `activerecord_unittest` / `activerecord_unittest2` + a `rails` user must exist.
-- Runner: `prototype/ar/run_test.sh <test/cases/.../foo_test.rb>`.
+  from source, not installed into the bundle).
+- **Config** (`test/rails/config.yml`, `ARCONFIG`): mysql2 connections with ENV-overridable
+  `MYSQL_HOST`/`PORT`/`USER`/`PASSWORD` (default `127.0.0.1:13306` root/root) and
+  `AR_PREPARED_STATEMENTS`. `N=0` (minitest parallel crashes on JRuby) and the Connector/J jar
+  on `CLASSPATH` are set by the rake task.
 
 **Results — mysql2-specific adapter tests (Rails 8.0.5, MySQL 8.0): 55/55 passing.**
 
