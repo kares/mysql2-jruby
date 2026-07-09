@@ -210,14 +210,12 @@ public class Client extends RubyObject {
         return context.runtime.newFixnum(warningCount);
     }
 
-    // mysql_set_server_option: true for the known OPTION_MULTI_STATEMENTS_ON/OFF
-    // values, false otherwise. The server-side toggle is a no-op here since
-    // multi-statement query support (next_result/store_result) is not implemented.
+    // mysql_set_server_option (COM_SET_OPTION). No public Connector/J API and no
+    // multi-statement query support, so this is a nil-returning no-op kept only
+    // for API compatibility (see #automatic_close=).
     @JRubyMethod(name = "set_server_option")
     public IRubyObject set_server_option(ThreadContext context, IRubyObject value) {
-        long v = value.convertToInteger().getLongValue();
-        boolean known = v == 0 /* OPTION_MULTI_STATEMENTS_ON */ || v == 1 /* OPTION_MULTI_STATEMENTS_OFF */;
-        return context.runtime.newBoolean(known);
+        return context.nil;
     }
 
     // In mysql2 this prevents a forked child's GC from closing the parent's shared
