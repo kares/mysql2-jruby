@@ -1,0 +1,54 @@
+# Examples excluded from `rake mysql2:spec` — features that don't map to a JDBC /
+# JRuby-backed implementation, or that were deliberately deferred. Each line is a
+# substring of the example's full description (or /regexp/). Edited here, in this
+# gem's repo, so the upstream mysql2 checkout stays untouched. Remaining failures
+# after these are genuine gaps worth tracking.
+
+# --- C-level socket / file descriptor: no fd behind a JDBC connection ---
+#socket
+should respond to #socket
+
+# --- server connection thread id via the C API ---
+#thread_id
+should respond to #thread_id
+
+# --- libmysqlclient connect attributes (program_name / custom) ---
+connect_attrs
+
+# --- COM_-level session state tracking ---
+session_track
+when session tracking is on
+
+# --- EventMachine async (Mysql2::EM) — not implemented ---
+evented async queries
+on the fly async query
+
+# --- fork / GC socket ownership: no fork, GC is the JVM's on JRuby ---
+#automatic_close
+garbage collection
+dangling connections
+should terminate connections when calling close
+
+# --- UNIX signal handling while a query is in flight ---
+signal handlers
+
+# --- client-side multi-result iteration (next_result/store_result/more_results?) — deferred ---
+Multiple results sets
+enables multiple-statement
+with multi statements
+
+# --- server status flags not surfaced by JDBC (query_was_slow / no_index_used) ---
+server flags
+
+# --- raw connection-flag bitmask isn't exposed via JDBC ---
+should parse flags string
+should parse flags array
+should default flags to
+should accept connect flags and pass them to #connect
+
+# --- thread-affinity / concurrent-use guards specific to the C client ---
+concurrent use of #ping
+concurrent use of #close
+prevent using a connection held by a dead thread
+describe the thread holding the active query
+should not allow another query to be sent without fetching a result first

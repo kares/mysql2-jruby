@@ -82,10 +82,11 @@ namespace :mysql2 do
     RUBY
   end
 
-  desc "Run the mysql2 gem's RSpec suite against this gem (MYSQL2=../mysql2). SPEC=file to limit."
+  desc "Run the mysql2 gem's RSpec suite against this gem (MYSQL2=../mysql2). SPEC=file to limit; NO_EXCLUDES=true to run all."
   task :spec => :compile do
     dir = mysql2_checkout
     harness = File.expand_path('test/mysql2/harness.rb', __dir__)
+    excludes = File.expand_path('test/mysql2/rspec_excludes.rb', __dir__)
 
     # Seed the suite's git-ignored local config if the checkout doesn't have one.
     config_dst = File.join(dir, 'spec', 'configuration.yml')
@@ -96,10 +97,14 @@ namespace :mysql2 do
 
     specs = ENV['SPEC'] ? ENV['SPEC'].split(',') : ['spec/mysql2']
     cp = [ENV['CLASSPATH'], File.expand_path(CONNECTOR)].compact.join(File::PATH_SEPARATOR)
+    # -r our harness so our mysql2 loads before spec_helper; -r the excludes hook
+    # (skips known out-of-scope examples from test/mysql2/excludes.txt) unless disabled.
+    requires = ['-r', harness]
+    requires += ['-r', excludes] unless ENV['NO_EXCLUDES'] == 'true'
     # Run from the checkout so spec_helper's relative paths (spec/configuration.yml,
-    # spec/test_data) resolve; -r our harness so our mysql2 loads before spec_helper.
+    # spec/test_data) resolve.
     Dir.chdir(dir) do
-      sh({ 'CLASSPATH' => cp }, RbConfig.ruby, '-S', 'rspec', '-I', 'spec', '-r', harness, *specs) do |ok, res|
+      sh({ 'CLASSPATH' => cp }, RbConfig.ruby, '-S', 'rspec', '-I', 'spec', *requires, *specs) do |ok, res|
         exit(res.exitstatus || 1) unless ok # spec failures: exit with rspec's status, no rake backtrace
       end
     end
