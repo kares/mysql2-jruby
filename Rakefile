@@ -52,6 +52,60 @@ end
 
 task default: :compile
 
+# --- mysql2 gem's own RSpec suite, run against this gem ----------------------
+#
+# Points at an upstream mysql2 checkout (ENV MYSQL2=../mysql2) and runs its specs
+# with our source-built gem swapped in for the C extension.
+#
+#   MYSQL2=../mysql2 rake mysql2:db:build     # create the `test` database
+#   MYSQL2=../mysql2 rake mysql2:spec         # run spec/mysql2/*_spec.rb
+#   MYSQL2=../mysql2 rake mysql2:spec SPEC=spec/mysql2/result_spec.rb
+#
+# ENV: MYSQL2 (checkout path, default ../mysql2), SPEC (comma-separated paths
+# relative to the checkout, default spec/mysql2), MYSQL_HOST/PORT/ROOT_PASSWORD.
+namespace :mysql2 do
+  def mysql2_checkout
+    dir = ENV['MYSQL2'] || File.expand_path('../mysql2', __dir__)
+    abort "mysql2 checkout not found (set MYSQL2=...); tried #{dir}" unless File.directory?(File.join(dir, 'spec', 'mysql2'))
+    dir
+  end
+
+  desc 'Create the mysql2 spec database (default: `test` on 127.0.0.1:13306)'
+  task 'db:build' => :compile do
+    run_jruby(['-Ilib', '-e', <<~RUBY])
+      require 'mysql2'
+      c = Mysql2::Client.new(host: ENV['MYSQL_HOST'] || '127.0.0.1', port: (ENV['MYSQL_PORT'] || 13306).to_i,
+                             username: 'root', password: ENV['MYSQL_ROOT_PASSWORD'] || 'root')
+      db = ENV['MYSQL_DATABASE'] || 'test'
+      c.query("CREATE DATABASE IF NOT EXISTS \#{db} DEFAULT CHARACTER SET utf8mb4")
+      puts "built: " + c.query("SHOW DATABASES LIKE '\#{db}'").to_a.map(&:values).join
+    RUBY
+  end
+
+  desc "Run the mysql2 gem's RSpec suite against this gem (MYSQL2=../mysql2). SPEC=file to limit."
+  task :spec => :compile do
+    dir = mysql2_checkout
+    harness = File.expand_path('test/mysql2/harness.rb', __dir__)
+
+    # Seed the suite's git-ignored local config if the checkout doesn't have one.
+    config_dst = File.join(dir, 'spec', 'configuration.yml')
+    unless File.exist?(config_dst)
+      cp File.expand_path('test/mysql2/configuration.yml', __dir__), config_dst
+      puts "seeded #{config_dst}"
+    end
+
+    specs = ENV['SPEC'] ? ENV['SPEC'].split(',') : ['spec/mysql2']
+    cp = [ENV['CLASSPATH'], File.expand_path(CONNECTOR)].compact.join(File::PATH_SEPARATOR)
+    # Run from the checkout so spec_helper's relative paths (spec/configuration.yml,
+    # spec/test_data) resolve; -r our harness so our mysql2 loads before spec_helper.
+    Dir.chdir(dir) do
+      sh({ 'CLASSPATH' => cp }, RbConfig.ruby, '-S', 'rspec', '-I', 'spec', '-r', harness, *specs) do |ok, res|
+        exit(res.exitstatus || 1) unless ok # spec failures: exit with rspec's status, no rake backtrace
+      end
+    end
+  end
+end
+
 # --- Rails' own ActiveRecord test suite, run against this gem ----------------
 #
 # Reuses Rails' stock Mysql2Adapter driving our Mysql2::Client. Modeled on
@@ -117,7 +171,9 @@ namespace :rails do
 
     env = rails_env(rails)
     env['EXCLUDE_DIR'] ||= File.expand_path('test/rails/excludes/mysql2', __dir__)
-    sh(env, "#{RbConfig.ruby} #{ruby_opts} #{loader} #{files_str} #{testopts}")
+    sh(env, "#{RbConfig.ruby} #{ruby_opts} #{loader} #{files_str} #{testopts}") do |ok, res|
+      exit(res.exitstatus || 1) unless ok # test failures: exit with the runner's status, no rake backtrace
+    end
   end
 
   namespace :db do

@@ -1,0 +1,8 @@
+# Seeded into <mysql2-checkout>/spec/configuration.yml by `rake mysql2:spec` when that
+# file is absent (it's git-ignored in the mysql2 repo). The suite reads the `root:` key.
+root:
+  host: 127.0.0.1
+  port: 13306
+  username: root
+  password: root
+  database: test
