@@ -167,6 +167,19 @@ public class Client extends RubyObject {
         }
     }
 
+    // mysql_thread_id: the server's id for this connection (used by KILL etc.).
+    @JRubyMethod(name = "thread_id")
+    public IRubyObject thread_id(ThreadContext context) {
+        com.mysql.cj.NativeSession session = nativeSession();
+        if (session != null) return context.runtime.newFixnum(session.getThreadId());
+        try (Statement s = connection.createStatement();
+             ResultSet rs = s.executeQuery("SELECT CONNECTION_ID()")) {
+            return context.runtime.newFixnum(rs.next() ? rs.getLong(1) : 0);
+        } catch (SQLException e) {
+            throw errorFromSQL(context, e);
+        }
+    }
+
     // --- query ---------------------------------------------------------------
 
     @JRubyMethod(required = 1, optional = 1)

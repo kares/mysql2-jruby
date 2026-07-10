@@ -5,12 +5,10 @@
 # after these are genuine gaps worth tracking.
 
 # --- C-level socket / file descriptor: no fd behind a JDBC connection ---
-#socket
+# (the "#socket should raise as it's not supported" spec passes and is kept)
 should respond to #socket
-
-# --- server connection thread id via the C API ---
-#thread_id
-should respond to #thread_id
+#socket should return a Fixnum
+#socket should require an open connection
 
 # --- libmysqlclient connect attributes (program_name / custom) ---
 connect_attrs
@@ -23,8 +21,10 @@ when session tracking is on
 evented async queries
 on the fly async query
 
-# --- fork / GC socket ownership: no fork, GC is the JVM's on JRuby ---
+# --- #automatic_close is a nil-returning stub: no fork/GC socket ownership on JRuby ---
 #automatic_close
+
+# --- fork / GC socket ownership: no fork, GC is the JVM's on JRuby ---
 garbage collection
 dangling connections
 should terminate connections when calling close
