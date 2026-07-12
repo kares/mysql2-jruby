@@ -38,6 +38,11 @@ public class Client extends RubyObject {
     private int readTimeoutSeconds = -1; // configured :read_timeout, or -1 if unset
     private org.jcodings.Encoding clientEncoding = org.jcodings.specific.UTF8Encoding.INSTANCE;
 
+    // Connection parameters retained so #ping can re-establish the connection when
+    // reconnect: true (mysql2's mysql_ping auto-reconnect), re-running init_command etc.
+    private String jdbcUrl, jdbcUser, jdbcPass, connEncoding, connInitCommand;
+    private boolean connMultiStatements, connReconnect;
+
     transient com.mysql.cj.NativeSession nativeSession; // for runtime COM_SET_OPTION toggles
 
     public Client(Ruby runtime, RubyClass klass) {
@@ -85,38 +90,52 @@ public class Client extends RubyObject {
             // the opposite of mysql2's "fail unless the response is ready ~immediately".
             if (readTimeout > 0) url.append("&socketTimeout=").append(readTimeout * 1000L);
         }
-        if (bool(opt(context, opts, "reconnect"), false)) url.append("&autoReconnect=true");
+        // NB: JDBC autoReconnect is deliberately not used -- it's deprecated and fails to
+        // reconnect after the server drops the connection; #ping reconnects manually instead.
         if (bool(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
 
-        String initCommand = str(opt(context, opts, "init_command"));
+        this.jdbcUrl = url.toString();
+        this.jdbcUser = user;
+        this.jdbcPass = pass;
+        this.connEncoding = encoding;
+        this.connInitCommand = str(opt(context, opts, "init_command"));
+        this.connMultiStatements = isMultiStatements(context, opts);
+        this.connReconnect = bool(opt(context, opts, "reconnect"), false);
 
         try { // TODO avoid DriverManager usage
-            this.connection = DriverManager.getConnection(url.toString(), user, pass);
-            // Make result strings come back in the client encoding (like mysql2's
-            // character_set_results), so field metadata reports that charset and
-            // getBytes() yields bytes we can tag correctly.
-            try (Statement s = connection.createStatement()) {
-                s.execute("SET character_set_results = " + sanitizeCharset(encoding));
-            }
-            // flags: [MULTI_STATEMENTS] means "always on"; ActiveRecord then skips the
-            // per-batch set_server_option toggle, so enable it for the whole connection.
-            if (isMultiStatements(context, opts)) {
-                com.mysql.cj.NativeSession session = nativeSession();
-                if (session != null) session.enableMultiQueries();
-            }
-            if (initCommand != null) {
-                try (Statement s = connection.createStatement()) { s.execute(initCommand); }
-            }
-            // read_timeout: 0 -> a 1ms network timeout, applied now so the handshake and the
-            // setup queries above aren't aborted by it. Models mysql2's non-blocking poll
-            // (read_timeout:0 fails a query whose response isn't essentially immediate).
-            if (readTimeout != null && readTimeout == 0) {
-                connection.setNetworkTimeout(Runnable::run, 1);
-            }
+            establishConnection();
         } catch (SQLException e) {
             throw errorFromSQL(context, e);
         }
         return context.nil;
+    }
+
+    /** Open the JDBC connection and apply the mysql2-equivalent session setup. Reused by
+     *  #ping when reconnect: true, so init_command etc. are re-sent on reconnect. */
+    private void establishConnection() throws SQLException {
+        this.connection = DriverManager.getConnection(jdbcUrl, jdbcUser, jdbcPass);
+        this.nativeSession = null; // re-resolve for the new physical connection
+        // Make result strings come back in the client encoding (like mysql2's
+        // character_set_results), so field metadata reports that charset and
+        // getBytes() yields bytes we can tag correctly.
+        try (Statement s = connection.createStatement()) {
+            s.execute("SET character_set_results = " + sanitizeCharset(connEncoding));
+        }
+        // flags: [MULTI_STATEMENTS] means "always on"; ActiveRecord then skips the
+        // per-batch set_server_option toggle, so enable it for the whole connection.
+        if (connMultiStatements) {
+            com.mysql.cj.NativeSession session = nativeSession();
+            if (session != null) session.enableMultiQueries();
+        }
+        if (connInitCommand != null) {
+            try (Statement s = connection.createStatement()) { s.execute(connInitCommand); }
+        }
+        // read_timeout: 0 -> a 1ms network timeout, applied now so the handshake and the
+        // setup queries above aren't aborted by it. Models mysql2's non-blocking poll
+        // (read_timeout:0 fails a query whose response isn't essentially immediate).
+        if (readTimeoutSeconds == 0) {
+            connection.setNetworkTimeout(Runnable::run, 1);
+        }
     }
 
     /** :flags may be an Integer bitmask or an Array of flag names; detect MULTI_STATEMENTS. */
@@ -180,10 +199,21 @@ public class Client extends RubyObject {
     @JRubyMethod
     public IRubyObject ping(ThreadContext context) {
         try {
-            return context.runtime.newBoolean(connection != null && !connection.isClosed() && connection.isValid(0));
+            if (connection != null && !connection.isClosed() && connection.isValid(0)) return context.tru;
         } catch (SQLException e) {
-            return context.fals;
+            // fall through to reconnect handling
         }
+        // Connection is down. mysql2's mysql_ping reconnects when reconnect: true, re-running
+        // init_command; Connector/J's own autoReconnect is broken, so we re-establish manually.
+        if (connReconnect) {
+            try {
+                establishConnection();
+                return context.tru;
+            } catch (SQLException e) {
+                return context.fals;
+            }
+        }
+        return context.fals;
     }
 
     // mysql_thread_id: the server's id for this connection (used by KILL etc.).
