@@ -78,7 +78,7 @@ public class Statement extends RubyObject {
             for (int i = 0; i < argCount; i++) bindParam(context, i + 1, args[i]);
             boolean hasResult = statement.execute();
             if (hasResult) { // stmtToClose == null: keep the PreparedStatement open for re-execute
-                return client.buildResult(context, statement.getResultSet(), null, client.mergedOptions(context, opts));
+                return client.buildResult(context, statement.getResultSet(), null, client.mergedOptions(context, opts), true);
             }
             this.affectedRows = Math.max(statement.getUpdateCount(), 0);
             final ResultSet keys = statement.getGeneratedKeys();

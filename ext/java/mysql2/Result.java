@@ -30,13 +30,15 @@ public class Result extends RubyObject {
     private boolean closed;
     private int streamedCount;         // rows yielded/drained so far (streaming)
     private boolean streamingComplete; // streaming result fully consumed
+    private final boolean fromStatement; // prepared-statement result (affects each without a block)
 
-    public Result(Ruby runtime, RubyClass klass, ResultSet resultSet, Statement statement, RowReader reader, boolean cacheRows) {
+    public Result(Ruby runtime, RubyClass klass, ResultSet resultSet, Statement statement, RowReader reader, boolean cacheRows, boolean fromStatement) {
         super(runtime, klass);
 
         this.resultSet = resultSet;
         this.statement = statement;
         this.reader = reader;
+        this.fromStatement = fromStatement;
 
         // cache_rows (default): buffer all rows now and free the result set, like mysql2's store_result
         // this lets a prepared statement be re-executed without invalidating earlier results
@@ -65,10 +67,19 @@ public class Result extends RubyObject {
         }
         boolean transform = targetArray != reader.isAsArray() || targetSym != reader.isSymbolizeKeys();
 
-        // Cached (cache_rows, default): rows were buffered at construction. Yield
-        // them; with no block a non-empty result raises LocalJumpError on the
-        // first yield, an empty one returns cleanly.
+        // Cached (cache_rows, default): rows were buffered at construction.
+        // A query result without a block returns the row array (mysql2 returns
+        // wrapper->rows), so `result.each` / `result.each(as: :array)` don't raise.
+        // A prepared-statement result instead yields unconditionally, so `each`
+        // with no block raises LocalJumpError on a non-empty result (statement_spec).
         if (cachedRows != null) {
+            if (!block.isGiven() && !fromStatement) {
+                IRubyObject[] out = new IRubyObject[cachedRows.length];
+                for (int i = 0; i < cachedRows.length; i++) {
+                    out[i] = transform ? transformRow(context, cachedRows[i], targetArray, targetSym) : cachedRows[i];
+                }
+                return RubyArray.newArray(runtime, out);
+            }
             for (int i = 0; i < cachedRows.length; i++) {
                 block.yield(context, transform ? transformRow(context, cachedRows[i], targetArray, targetSym) : cachedRows[i]);
             }

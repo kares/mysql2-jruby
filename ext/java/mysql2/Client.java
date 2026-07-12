@@ -197,7 +197,7 @@ public class Client extends RubyObject {
             this.queryInfoString = extractServerInfo(stmt);
             this.warningCount = countWarnings(stmt);
             if (hasResult) {
-                return buildResult(context, stmt.getResultSet(), stmt, merged);
+                return buildResult(context, stmt.getResultSet(), stmt, merged, false);
             } else {
                 this.affectedRows = Math.max(stmt.getUpdateCount(), 0);
                 ResultSet keys = stmt.getGeneratedKeys();
@@ -224,8 +224,9 @@ public class Client extends RubyObject {
     }
 
     /** Build a Mysql2::Result over rs. stmtToClose is closed with the result set
-     *  (pass null to leave the statement open, e.g. a reusable PreparedStatement). */
-    Result buildResult(ThreadContext context, ResultSet resultSet, Statement stmtToClose, RubyHash merged) throws SQLException {
+     *  (pass null to leave the statement open, e.g. a reusable PreparedStatement).
+     *  fromStatement marks prepared-statement results (each without a block raises). */
+    Result buildResult(ThreadContext context, ResultSet resultSet, Statement stmtToClose, RubyHash merged, boolean fromStatement) throws SQLException {
         Ruby runtime = context.runtime;
         RowReader reader = new RowReader(
                 runtime, resultSet,
@@ -239,7 +240,7 @@ public class Client extends RubyObject {
                 localOffset(context, getMetaClass()));
         boolean cacheRows = bool(hash(context, merged, "cache_rows"), true);
         RubyClass resultClass = runtime.getModule("Mysql2").getClass("Result");
-        return new Result(runtime, resultClass, resultSet, stmtToClose, reader, cacheRows);
+        return new Result(runtime, resultClass, resultSet, stmtToClose, reader, cacheRows, fromStatement);
     }
 
     RubyHash mergedOptions(ThreadContext context, IRubyObject opts) {
