@@ -10,6 +10,10 @@ rails_dir = ENV["RAILS"] or raise "set ENV['RAILS'] to a Rails checkout"
 %w[activerecord activemodel activesupport actionpack actionview].each do |name|
   gem name, require: false, path: File.join(rails_dir, name)
 end
+
+# This gem, from source, satisfying the adapter's `gem "mysql2", "~> 0.5"`. Bundling it
+# (rather than stubbing Kernel#gem) makes it resolve in isolated/subprocess tests too.
+gem "mysql2", require: false, path: File.expand_path("../..", __dir__)
 # NB: railties is intentionally NOT a bundled gem (it drags irb/rdoc/rbs, which need a
 # native build). Its lib is added to the load path by test/rails/harness.rb instead —
 # minitest 6 autoloads railties/lib/minitest/rails_plugin.rb.
