@@ -73,12 +73,17 @@ public class Client extends RubyObject {
         StringBuilder url = new StringBuilder("jdbc:mysql://").append(host).append(':').append(port)
                 .append('/').append(database)
                 .append("?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8");
-        Integer connectTimeout = intOpt(context, opts, "connect_timeout");
+        // mysql2 rejects negative timeouts (write_timeout has no JDBC analog, but is still validated).
+        Integer connectTimeout = requirePositiveTimeout(context, intOpt(context, opts, "connect_timeout"), "connect_timeout");
         if (connectTimeout != null) url.append("&connectTimeout=").append(connectTimeout * 1000L);
-        Integer readTimeout = intOpt(context, opts, "read_timeout");
+        requirePositiveTimeout(context, intOpt(context, opts, "write_timeout"), "write_timeout");
+        Integer readTimeout = requirePositiveTimeout(context, intOpt(context, opts, "read_timeout"), "read_timeout");
         if (readTimeout != null) {
             this.readTimeoutSeconds = readTimeout;
-            url.append("&socketTimeout=").append(readTimeout * 1000L);
+            // read_timeout > 0 maps to JDBC socketTimeout (seconds -> ms). read_timeout == 0
+            // is applied after connect (below): JDBC treats socketTimeout=0 as "infinite",
+            // the opposite of mysql2's "fail unless the response is ready ~immediately".
+            if (readTimeout > 0) url.append("&socketTimeout=").append(readTimeout * 1000L);
         }
         if (bool(opt(context, opts, "reconnect"), false)) url.append("&autoReconnect=true");
         if (bool(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
@@ -101,6 +106,12 @@ public class Client extends RubyObject {
             }
             if (initCommand != null) {
                 try (Statement s = connection.createStatement()) { s.execute(initCommand); }
+            }
+            // read_timeout: 0 -> a 1ms network timeout, applied now so the handshake and the
+            // setup queries above aren't aborted by it. Models mysql2's non-blocking poll
+            // (read_timeout:0 fails a query whose response isn't essentially immediate).
+            if (readTimeout != null && readTimeout == 0) {
+                connection.setNetworkTimeout(Runnable::run, 1);
             }
         } catch (SQLException e) {
             throw errorFromSQL(context, e);
@@ -125,6 +136,14 @@ public class Client extends RubyObject {
             return (((RubyInteger) flags).getLongValue() & MULTI_STATEMENTS) != 0;
         }
         return false;
+    }
+
+    /** mysql2 requires timeouts to be non-negative; raise Mysql2::Error otherwise. Returns v. */
+    private Integer requirePositiveTimeout(ThreadContext context, Integer v, String name) {
+        if (v != null && v < 0) {
+            throw error(context, name + " must be a positive integer, you passed " + v);
+        }
+        return v;
     }
 
     /** Integer option (seconds/count), or null when absent or non-numeric. */
