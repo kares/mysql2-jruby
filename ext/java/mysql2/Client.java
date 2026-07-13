@@ -502,7 +502,10 @@ public class Client extends RubyObject {
     @JRubyMethod(name = "select_db")
     public IRubyObject select_db(ThreadContext context, IRubyObject db) {
         try {
-            connection.setCatalog(db.convertToString().asJavaString());
+            // setDatabase() sends COM_INIT_DB directly, unlike setCatalog() whose meaning
+            // depends on Connector/J's databaseTerm setting.
+            connection.unwrap(com.mysql.cj.jdbc.ConnectionImpl.class)
+                    .setDatabase(db.convertToString().asJavaString());
         } catch (SQLException e) {
             throw errorFromSQL(context, e);
         }
