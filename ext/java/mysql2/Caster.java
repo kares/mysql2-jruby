@@ -21,19 +21,19 @@ public final class Caster {
     private static final long MYSQL2_MIN_TIME = 2678400L;
     private static final long MYSQL2_MAX_TIME = 315578267999L;
 
-    public static IRubyObject byteCast(CastCtx ctx, TextRow row, int col, Field f) {
+    public static IRubyObject byteCast(CastCtx ctx, TextRow row, int col, Field field) {
         Ruby runtime = ctx.runtime;
         byte[] b = row.getBytes(col);
         if (b == null) return runtime.getNil();
 
-        switch (f.type) {
+        switch (field.type) {
             case Field.TYPE_NULL:
                 return runtime.getNil();
             case Field.TYPE_BIT:
-                if (ctx.castBooleans && f.length == 1) return runtime.newBoolean(b.length > 0 && b[0] == 1);
+                if (ctx.castBooleans && field.length == 1) return runtime.newBoolean(b.length > 0 && b[0] == 1);
                 return newBinaryString(runtime, b);
             case Field.TYPE_TINY:
-                if (ctx.castBooleans && f.length == 1) return runtime.newBoolean(b.length > 0 && b[0] != '0');
+                if (ctx.castBooleans && field.length == 1) return runtime.newBoolean(b.length > 0 && b[0] != '0');
                 return parseInteger(runtime, b);
             case Field.TYPE_SHORT:
             case Field.TYPE_LONG:
@@ -43,7 +43,7 @@ public final class Caster {
                 return parseInteger(runtime, b);
             case Field.TYPE_DECIMAL:
             case Field.TYPE_NEWDECIMAL:
-                if (f.decimals == 0) return parseInteger(runtime, b);
+                if (field.decimals == 0) return parseInteger(runtime, b);
                 if (parseDouble(b) == 0.0) return ctx.decimalZero;
                 return ctx.bigDecimal(runtime.newString(new String(b, StandardCharsets.US_ASCII)));
             case Field.TYPE_FLOAT:
@@ -60,15 +60,15 @@ public final class Caster {
             case Field.TYPE_NEWDATE:
                 return parseDate(ctx, b);
             default:
-                return castString(ctx, b, f);
+                return castString(ctx, b, field);
         }
     }
 
     /** cast:false -- every non-NULL value as a String with the field's encoding. */
-    public static IRubyObject raw(CastCtx ctx, TextRow row, int col, Field f) {
+    public static IRubyObject raw(CastCtx ctx, TextRow row, int col, Field field) {
         byte[] b = row.getBytes(col);
         if (b == null) return ctx.runtime.getNil();
-        return castString(ctx, b, f);
+        return castString(ctx, b, field);
     }
 
     /**
@@ -76,10 +76,10 @@ public final class Caster {
      * then transcoded to Encoding.default_internal when set. Mirrors mysql2's
      * mysql2_set_field_string_encoding.
      */
-    private static IRubyObject castString(CastCtx ctx, byte[] b, Field f) {
+    private static IRubyObject castString(CastCtx ctx, byte[] b, Field field) {
         Ruby runtime = ctx.runtime;
-        if (f.isBinary()) return newBinaryString(runtime, b);
-        org.jcodings.Encoding enc = ctx.encodingFor(f);
+        if (field.isBinary()) return newBinaryString(runtime, b);
+        org.jcodings.Encoding enc = ctx.encodingFor(field);
         RubyString str = runtime.newString(new ByteList(b, enc, false));
         if (ctx.defaultInternal != null && ctx.defaultInternal != enc) {
             return org.jruby.util.io.EncodingUtils.strConvEnc(ctx.context, str, enc, ctx.defaultInternal);

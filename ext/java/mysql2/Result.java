@@ -1,8 +1,5 @@
 package mysql2;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.ArrayList;
 
 import org.jruby.Ruby;
@@ -23,8 +20,6 @@ public class Result extends RubyObject {
         throw runtime.newTypeError("wrapping without a result set is not supported");
     };
 
-    private ResultSet resultSet;
-    private Statement statement;
     private RowReader reader;
     private IRubyObject[] cachedRows;
     private boolean closed;
@@ -32,11 +27,9 @@ public class Result extends RubyObject {
     private boolean streamingComplete; // streaming result fully consumed
     private final boolean fromStatement; // prepared-statement result (affects each without a block)
 
-    public Result(Ruby runtime, RubyClass klass, ResultSet resultSet, Statement statement, RowReader reader, boolean cacheRows, boolean fromStatement) {
+    public Result(Ruby runtime, RubyClass klass, RowReader reader, boolean cacheRows, boolean fromStatement) {
         super(runtime, klass);
 
-        this.resultSet = resultSet;
-        this.statement = statement;
         this.reader = reader;
         this.fromStatement = fromStatement;
 
@@ -163,7 +156,6 @@ public class Result extends RubyObject {
     private void close() {
         if (closed) return;
         closed = true;
-        try { if (resultSet != null) resultSet.close(); } catch (SQLException ignore) { }
-        try { if (statement != null) statement.close(); } catch (SQLException ignore) { }
+        reader.close();
     }
 }

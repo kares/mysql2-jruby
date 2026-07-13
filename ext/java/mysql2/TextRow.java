@@ -3,12 +3,13 @@ package mysql2;
 import java.sql.Timestamp;
 
 /**
- * Column accessors the caster needs. A real MySQL text-protocol JDBC ResultSet
- * satisfies this via {@link JdbcTextRow}; the benchmark uses {@link FakeTextRow}.
+ * Column accessors the caster needs, over the current row of a {@link RowSource}
+ * (Connector/J's protocol Resultset via {@link CjRowSource}, or a JDBC ResultSet
+ * via {@link JdbcRowSource}).
  *
  * getBytes(i) returns the raw wire bytes (text protocol: ASCII digits / charset
- * bytes), which is the cheap path. The typed getters model the driver's own
- * decode+box work that the byte path aims to avoid.
+ * bytes), which is the cheap path the caster uses. The typed getters model the
+ * driver's own decode+box work the byte path avoids (used by the benchmark).
  */
 public interface TextRow {
     byte[] getBytes(int col);     // raw wire bytes, or null for SQL NULL (0-based)

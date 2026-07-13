@@ -1,7 +1,7 @@
 package mysql2;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
+import java.sql.DriverManager; // TODO avoid
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -118,8 +118,8 @@ public class Client extends RubyObject {
         // Make result strings come back in the client encoding (like mysql2's
         // character_set_results), so field metadata reports that charset and
         // getBytes() yields bytes we can tag correctly.
-        try (Statement s = connection.createStatement()) {
-            s.execute("SET character_set_results = " + sanitizeCharset(connEncoding));
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("SET character_set_results = " + sanitizeCharset(connEncoding));
         }
         // flags: [MULTI_STATEMENTS] means "always on"; ActiveRecord then skips the
         // per-batch set_server_option toggle, so enable it for the whole connection.
@@ -128,7 +128,9 @@ public class Client extends RubyObject {
             if (session != null) session.enableMultiQueries();
         }
         if (connInitCommand != null) {
-            try (Statement s = connection.createStatement()) { s.execute(connInitCommand); }
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(connInitCommand);
+            }
         }
         // read_timeout: 0 -> a 1ms network timeout, applied now so the handshake and the
         // setup queries above aren't aborted by it. Models mysql2's non-blocking poll
@@ -239,12 +241,50 @@ public class Client extends RubyObject {
 
     @JRubyMethod(required = 1, optional = 1)
     public IRubyObject query(ThreadContext context, IRubyObject[] args) {
-        Ruby runtime = context.runtime;
-        String sql = args[0].convertToString().asJavaString();
         RubyHash merged = (args.length > 1 && !args[1].isNil())
                 ? (RubyHash) queryOptions.callMethod(context, "merge", args[1])
                 : queryOptions;
 
+        com.mysql.cj.NativeSession session = nativeSession();
+        if (session == null) return queryViaJdbc(context, args[0], merged);
+
+        // Send the query as raw bytes (in the connection encoding) rather than a decoded Java
+        // String, so bytes the server can't map -- e.g. invalid UTF-8 -- reach it intact and are
+        // echoed/scrubbed the way libmysqlclient sees them. Reading rows straight off Connector/J's
+        // protocol Resultset (Row#getBytes) also avoids the JDBC decode/box layer the caster undoes.
+        byte[] sqlBytes = queryBytes(context, args[0]);
+        try {
+            com.mysql.cj.protocol.a.NativeProtocol protocol = session.getProtocol();
+            com.mysql.cj.protocol.a.NativeMessageBuilder mb =
+                    (com.mysql.cj.protocol.a.NativeMessageBuilder) protocol.getMessageBuilder();
+            com.mysql.cj.protocol.a.NativePacketPayload packet =
+                    mb.buildComQuery(protocol.getSharedSendPacket(), session, sqlBytes);
+            com.mysql.cj.protocol.a.ResultsetFactory factory = new com.mysql.cj.protocol.a.ResultsetFactory(
+                    com.mysql.cj.protocol.Resultset.Type.FORWARD_ONLY,
+                    com.mysql.cj.protocol.Resultset.Concurrency.READ_ONLY);
+            com.mysql.cj.protocol.Resultset rs =
+                    session.execSQL(null, null, -1, packet, false, factory, null, false);
+
+            String info = rs.getServerInfo();
+            this.queryInfoString = (info == null || info.isEmpty()) ? null : info;
+            this.warningCount = protocol.getWarningCount();
+
+            if (rs.hasRows()) {
+                this.affectedRows = 0;
+                this.lastId = 0;
+                return buildResult(context, new CjRowSource(rs), merged, false);
+            }
+            this.affectedRows = Math.max(rs.getUpdateCount(), 0);
+            this.lastId = Math.max(rs.getUpdateID(), 0);
+            return context.nil;
+        } catch (com.mysql.cj.exceptions.CJException e) {
+            throw errorFromCJ(context, e);
+        }
+    }
+
+    /** Fallback for non-Connector/J drivers (no native session): the plain JDBC Statement path. */
+    private IRubyObject queryViaJdbc(ThreadContext context, IRubyObject sqlArg, RubyHash merged) {
+        String sql = sqlArg.convertToString().asJavaString();
         Statement stmt = null;
         try {
             stmt = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
@@ -252,18 +292,25 @@ public class Client extends RubyObject {
             this.queryInfoString = extractServerInfo(stmt);
             this.warningCount = countWarnings(stmt);
             if (hasResult) {
-                return buildResult(context, stmt.getResultSet(), stmt, merged, false);
-            } else {
-                this.affectedRows = Math.max(stmt.getUpdateCount(), 0);
-                ResultSet keys = stmt.getGeneratedKeys();
-                this.lastId = keys.next() ? keys.getLong(1) : 0;
-                stmt.close();
-                return context.nil;
+                return buildResult(context, new JdbcRowSource(stmt.getResultSet(), stmt), merged, false);
             }
+            this.affectedRows = Math.max(stmt.getUpdateCount(), 0);
+            ResultSet keys = stmt.getGeneratedKeys();
+            this.lastId = keys.next() ? keys.getLong(1) : 0;
+            stmt.close();
+            return context.nil;
         } catch (SQLException e) {
             try { if (stmt != null) stmt.close(); } catch (SQLException ignore) { }
             throw errorFromSQL(context, e);
         }
+    }
+
+    /** Query text as bytes in the connection encoding (mysql2's rb_str_export_to_enc). */
+    private byte[] queryBytes(ThreadContext context, IRubyObject sqlArg) {
+        RubyString s = sqlArg.convertToString();
+        if (s.getEncoding() == clientEncoding) return s.getBytes();
+        IRubyObject conv = org.jruby.util.io.EncodingUtils.strConvEnc(context, s, s.getEncoding(), clientEncoding);
+        return ((RubyString) conv).getBytes();
     }
 
     @JRubyMethod(name = "prepare")
@@ -278,13 +325,12 @@ public class Client extends RubyObject {
         }
     }
 
-    /** Build a Mysql2::Result over rs. stmtToClose is closed with the result set
-     *  (pass null to leave the statement open, e.g. a reusable PreparedStatement).
+    /** Build a Mysql2::Result over a row source (Connector/J Resultset or JDBC ResultSet).
      *  fromStatement marks prepared-statement results (each without a block raises). */
-    Result buildResult(ThreadContext context, ResultSet resultSet, Statement stmtToClose, RubyHash merged, boolean fromStatement) throws SQLException {
+    Result buildResult(ThreadContext context, RowSource source, RubyHash merged, boolean fromStatement) {
         Ruby runtime = context.runtime;
         RowReader reader = new RowReader(
-                runtime, resultSet,
+                runtime, source,
                 "array".equals(str(hash(context, merged, "as"))),
                 bool(hash(context, merged, "cast"), true),
                 bool(hash(context, merged, "cast_booleans"), false),
@@ -292,10 +338,10 @@ public class Client extends RubyObject {
                 orDefault(str(hash(context, merged, "database_timezone")), "local"),
                 str(hash(context, merged, "application_timezone")),
                 errorClass(runtime),
-                localOffset(context, getMetaClass()));
+                localOffset(context, null));
         boolean cacheRows = bool(hash(context, merged, "cache_rows"), true);
         RubyClass resultClass = runtime.getModule("Mysql2").getClass("Result");
-        return new Result(runtime, resultClass, resultSet, stmtToClose, reader, cacheRows, fromStatement);
+        return new Result(runtime, resultClass, reader, cacheRows, fromStatement);
     }
 
     RubyHash mergedOptions(ThreadContext context, IRubyObject opts) {
@@ -699,21 +745,28 @@ public class Client extends RubyObject {
     }
 
     RuntimeException errorFromSQL(ThreadContext context, SQLException e) {
+        return buildError(context, e.getErrorCode(), e.getSQLState(), e.getMessage(), isSocketTimeout(e));
+    }
+
+    RuntimeException errorFromCJ(ThreadContext context, com.mysql.cj.exceptions.CJException e) {
+        return buildError(context, e.getVendorCode(), e.getSQLState(), e.getMessage(), isSocketTimeout(e));
+    }
+
+    private RuntimeException buildError(ThreadContext context, int code, String sqlStateStr, String message, boolean timeout) {
         Ruby runtime = context.runtime;
         // A vendor code of 0 means the driver raised it, not the server (no MySQL errno);
         // mysql2 reports nil there, and ActiveRecord keys its "not connected" branch off nil.
-        int code = e.getErrorCode();
         IRubyObject errno = code == 0 ? runtime.getNil() : runtime.newFixnum(code);
-        IRubyObject sqlState = e.getSQLState() == null ? runtime.getNil() : runtime.newString(e.getSQLState());
-        IRubyObject msg = runtime.newString(e.getMessage() == null ? "" : e.getMessage());
+        IRubyObject sqlState = sqlStateStr == null ? runtime.getNil() : runtime.newString(sqlStateStr);
+        IRubyObject msg = runtime.newString(message == null ? "" : message);
 
         // A read_timeout (JDBC socketTimeout) throws a CommunicationsException wrapping a
         // java.net.SocketTimeoutException. mysql2 surfaces this as Mysql2::Error::TimeoutError
         // (with nil errno), which ActiveRecord maps to AdapterTimeout; the generic 08-state
         // routing would otherwise mislabel it as a connection failure.
-        if (isSocketTimeout(e)) {
-            RubyClass timeout = (RubyClass) errorClass(runtime).getConstant("TimeoutError");
-            RubyException exc = (RubyException) timeout.callMethod(context, "new",
+        if (timeout) {
+            RubyClass timeoutClass = (RubyClass) errorClass(runtime).getConstant("TimeoutError");
+            RubyException exc = (RubyException) timeoutClass.callMethod(context, "new",
                     new IRubyObject[]{msg, runtime.getNil(), runtime.getNil(), sqlState});
             return exc.toThrowable();
         }
