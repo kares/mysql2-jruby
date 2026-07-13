@@ -749,7 +749,10 @@ public class Client extends RubyObject {
     }
 
     RuntimeException errorFromCJ(ThreadContext context, com.mysql.cj.exceptions.CJException e) {
-        return buildError(context, e.getVendorCode(), e.getSQLState(), e.getMessage(), isSocketTimeout(e));
+        // Reuse Connector/J's own CJException -> SQLException mapping so we get the standard
+        // SQLState (e.g. 08S01 for a communications link failure) that error.rb routes to
+        // ConnectionError, rather than the generic S1000 the raw CJException reports.
+        return errorFromSQL(context, com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(e));
     }
 
     private RuntimeException buildError(ThreadContext context, int code, String sqlStateStr, String message, boolean timeout) {
