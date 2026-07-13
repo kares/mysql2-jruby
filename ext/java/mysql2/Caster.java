@@ -6,6 +6,8 @@ import org.jcodings.specific.ASCIIEncoding;
 import org.jcodings.specific.UTF8Encoding;
 import org.jruby.Ruby;
 import org.jruby.RubyString;
+import org.jruby.RubyTime;
+import org.jruby.ext.date.RubyDateTime;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
 import org.jruby.util.ConvertBytes;
@@ -141,34 +143,21 @@ public final class Caster {
         if (month < 1 || day < 1) {
             throw ctx.runtime.newRaiseException(ctx.errorClass, "Invalid date: " + new String(b, StandardCharsets.US_ASCII));
         }
-        return ctx.dateClass.callMethod(ctx.context, "new", new IRubyObject[]{
-                ctx.runtime.newFixnum(year), ctx.runtime.newFixnum(month), ctx.runtime.newFixnum(day)});
+        return ctx.newDate(year, month, day);
     }
 
     private static IRubyObject buildTime(CastCtx ctx, int y, int mo, int d, int h, int mi, int s, int usec) {
-        Ruby rt = ctx.runtime;
-        IRubyObject val = ctx.timeClass.callMethod(ctx.context, ctx.dbTimezone, new IRubyObject[]{
-                rt.newFixnum(y), rt.newFixnum(mo), rt.newFixnum(d),
-                rt.newFixnum(h), rt.newFixnum(mi), rt.newFixnum(s), rt.newFixnum(usec)});
-        return applyAppTimezone(ctx, val, false);
+        RubyTime time = ctx.newTime(y, mo, d, h, mi, s, usec);
+        if (ctx.appTimezone == null) return time;
+        if (ctx.appTimezone.equals("local")) return time.localtime(ctx.context); // time.localtime
+        return time.gmtime(ctx.context); // time.utc
     }
 
     private static IRubyObject buildDateTime(CastCtx ctx, int y, int mo, int d, int h, int mi, int s) {
-        Ruby rt = ctx.runtime;
-        IRubyObject offset = ctx.dbTimezone.equals("local") ? ctx.localOffset : ctx.utcOffset;
-        IRubyObject val = ctx.dateTimeClass.callMethod(ctx.context, "civil", new IRubyObject[]{
-                rt.newFixnum(y), rt.newFixnum(mo), rt.newFixnum(d),
-                rt.newFixnum(h), rt.newFixnum(mi), rt.newFixnum(s), offset});
-        return applyAppTimezone(ctx, val, true);
-    }
-
-    private static IRubyObject applyAppTimezone(CastCtx ctx, IRubyObject val, boolean isDateTime) {
+        RubyDateTime val = ctx.newDateTime(y, mo, d, h, mi, s);
         if (ctx.appTimezone == null) return val;
-        if (isDateTime) {
-            IRubyObject offset = ctx.appTimezone.equals("local") ? ctx.localOffset : ctx.utcOffset;
-            return val.callMethod(ctx.context, "new_offset", offset);
-        }
-        return val.callMethod(ctx.context, ctx.appTimezone.equals("local") ? "localtime" : "utc");
+        IRubyObject appOffset = ctx.appTimezone.equals("local") ? ctx.localOffset : ctx.utcOffset;
+        return val.new_offset(ctx.context, new IRubyObject[]{ appOffset }); // val.new_offset(appOffset)
     }
 
     // --- numeric -------------------------------------------------------------

@@ -7,6 +7,9 @@ import org.jcodings.Encoding;
 import org.jcodings.specific.UTF8Encoding;
 import org.jruby.Ruby;
 import org.jruby.RubyClass;
+import org.jruby.RubyTime;
+import org.jruby.ext.date.RubyDate;
+import org.jruby.ext.date.RubyDateTime;
 import org.jruby.runtime.Helpers;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
@@ -20,11 +23,9 @@ public final class CastCtx {
     final Ruby runtime;
     final ThreadContext context;
     final boolean castBooleans;
-    final String dbTimezone;  // "local" | "utc"
+    final boolean dbTimezoneLocal;
     final String appTimezone; // "local" | "utc" | null
 
-    final RubyClass timeClass;
-    final RubyClass dateClass;
     final RubyClass dateTimeClass;
     final RubyClass errorClass;
     final IRubyObject topSelf;      // receiver for Kernel#BigDecimal
@@ -41,11 +42,9 @@ public final class CastCtx {
         this.runtime = runtime;
         this.context = runtime.getCurrentContext();
         this.castBooleans = castBooleans;
-        this.dbTimezone = (dbTimezone == null || dbTimezone.isEmpty()) ? "local" : dbTimezone;
+        this.dbTimezoneLocal = (dbTimezone == null || dbTimezone.isEmpty()) ? true : dbTimezone.equals("local");
         this.appTimezone = appTimezone;
         this.errorClass = errorClass;
-        this.timeClass = runtime.getTime();
-        this.dateClass = (RubyClass) runtime.getObject().getConstant("Date");
         this.dateTimeClass = (RubyClass) runtime.getObject().getConstant("DateTime");
         this.topSelf = runtime.getTopSelf();
         this.decimalZero = bigDecimal(runtime.newString("0.0"));
@@ -57,6 +56,49 @@ public final class CastCtx {
 
     IRubyObject bigDecimal(IRubyObject arg) {
         return Helpers.invoke(context, topSelf, "BigDecimal", arg);
+    }
+
+    IRubyObject newDate(int year, int month, int day) {
+        return RubyDate.civil(
+                context,
+                getDateClass(),
+                runtime.newFixnum(year),
+                runtime.newFixnum(month),
+                runtime.newFixnum(day)
+        );
+    }
+
+    private transient RubyClass dateClass;
+
+    private RubyClass getDateClass() {
+        if (dateClass == null) {
+            this.dateClass = (RubyClass) runtime.getObject().getConstant("Date");
+        }
+        return dateClass;
+    }
+
+    RubyTime newTime(int year, int month, int day,
+                        int hour, int minute, int second,
+                        long usec) {
+        if (dbTimezoneLocal) {
+            return RubyTime.local(context, runtime.getTime(), new IRubyObject[] {
+                    runtime.newFixnum(year), runtime.newFixnum(month), runtime.newFixnum(day),
+                    runtime.newFixnum(hour), runtime.newFixnum(minute), runtime.newFixnum(second),
+                    runtime.newFixnum(usec) });
+        }
+        return RubyTime.utc(context, runtime.getTime(), new IRubyObject[] {
+                runtime.newFixnum(year), runtime.newFixnum(month), runtime.newFixnum(day),
+                runtime.newFixnum(hour), runtime.newFixnum(minute), runtime.newFixnum(second),
+                runtime.newFixnum(usec) });
+    }
+
+    RubyDateTime newDateTime(int year, int month, int day,
+                             int hour, int minute, int second) {
+        IRubyObject offset = dbTimezoneLocal ? localOffset : utcOffset;
+        return RubyDateTime.civil(context, dateTimeClass, new IRubyObject[] {
+                runtime.newFixnum(year), runtime.newFixnum(month), runtime.newFixnum(day),
+                runtime.newFixnum(hour), runtime.newFixnum(minute), runtime.newFixnum(second),
+                offset });
     }
 
     /** Ruby encoding for a string field, from the driver's charset name (cached). */
