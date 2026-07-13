@@ -229,6 +229,12 @@ public class Client extends RubyObject {
         }
     }
 
+    // mysql2's Client#encoding: the Ruby Encoding object for the connection charset.
+    @JRubyMethod
+    public IRubyObject encoding(ThreadContext context) {
+        return context.runtime.getEncodingService().getEncoding(clientEncoding);
+    }
+
     // --- query ---------------------------------------------------------------
 
     @JRubyMethod(required = 1, optional = 1)

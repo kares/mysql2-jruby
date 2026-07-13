@@ -46,6 +46,17 @@ should parse flags array
 should default flags to
 should accept connect flags and pass them to #connect
 
+# --- server-side prepared-statement counting: Connector/J uses client-side prepared
+#     statements by default, so the server's Prepared_stmt_count doesn't move ---
+should create a statement
+close should free server resources
+
+# --- invalid-UTF-8 query bytes: mysql2 (libmysqlclient) sends raw bytes, so the server
+#     scrubs them to '?' in the echoed error; Connector/J's String-based API decodes the
+#     invalid bytes to U+FFFD before sending, so the server echoes those instead. A JDBC
+#     boundary limitation, not something we can preserve byte-for-byte. ---
+returns error messages as UTF-8 by default
+
 # --- thread-affinity / concurrent-use guards specific to the C client ---
 concurrent use of #ping
 concurrent use of #close
