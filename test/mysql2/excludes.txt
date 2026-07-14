@@ -51,6 +51,14 @@ should accept connect flags and pass them to #connect
 should create a statement
 close should free server resources
 
+# --- streaming (stream: true) — not implemented: results are always buffered client-side and
+#     re-iterable, so single-pass semantics (advancing #first, iterate-twice / query-again locks,
+#     mid-stream timeouts) don't apply ---
+should yield different value for #first if streaming
+should throw an exception if we try to iterate twice when streaming is enabled
+should raise an exception if streaming ended due to a timeout
+should not let you query again if iterating is not finished when streaming
+
 # --- thread-affinity / concurrent-use guards specific to the C client ---
 concurrent use of #ping
 concurrent use of #close

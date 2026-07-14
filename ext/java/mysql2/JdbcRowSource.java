@@ -64,6 +64,15 @@ final class JdbcRowSource implements RowSource {
     }
 
     @Override
+    public void reset() {
+        try {
+            resultSet.beforeFirst();
+        } catch (SQLException e) {
+            throwException(e);
+        }
+    }
+
+    @Override
     public void close() {
         try {
             if (resultSet != null) resultSet.close();

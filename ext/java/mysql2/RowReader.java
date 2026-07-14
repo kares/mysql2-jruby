@@ -65,6 +65,11 @@ final class RowReader {
         return hash;
     }
 
+    /** Rewind to before the first row, so a non-streaming result can be re-iterated. */
+    void reset() {
+        source.reset();
+    }
+
     void close() {
         source.close();
     }

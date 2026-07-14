@@ -48,6 +48,12 @@ final class CJRowSource implements RowSource {
     }
 
     @Override
+    public void reset() {
+        current = null;
+        if (rows != null) rows.beforeFirst();
+    }
+
+    @Override
     public byte[] getBytes(int col) {
         return current.getNull(col) ? null : current.getBytes(col);
     }

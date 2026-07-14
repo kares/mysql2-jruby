@@ -17,6 +17,10 @@ interface RowSource extends TextRow {
     /** Advance to the next row; false at end of result. */
     boolean next();
 
+    /** Rewind to before the first row so the result can be iterated again
+     *  (non-streaming, buffered results only). */
+    void reset();
+
     /** Release the underlying result (and statement, if this source owns one). */
     void close();
 

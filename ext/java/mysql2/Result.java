@@ -26,8 +26,8 @@ public class Result extends RubyObject {
     private IRubyObject[] cachedRows;
     private boolean closed;
 
-    private int streamedCount;         // rows yielded/drained so far (streaming)
-    private boolean streamingComplete; // streaming result fully consumed
+    private int rowCount;    // rows produced by the last non-cached iteration (#count)
+    private boolean iterated; // a non-cached result was iterated at least once (needs rewind to repeat)
 
     public Result(Ruby runtime, RubyClass klass, RowReader reader, boolean cacheRows, boolean fromStatement) {
         super(runtime, klass);
@@ -81,24 +81,21 @@ public class Result extends RubyObject {
             return this;
         }
 
-        // streaming (cache_rows: false): drain lazily - rows are always fetched (#count tracks progress)
-        // but only yielded when a block is given; the result set is closed only on full exhaustion, so a
-        // partial consume (e.g. #first) can be resumed by a later #each
-        if (streamingComplete) {
-            throw Client.error(context, "You have already fetched all the rows for this query "
-                    + "and streaming is true. (to reiterate you must requery).");
-        }
+        // cache_rows: false: rows aren't buffered as Ruby objects (fresh objects each pass), but the
+        // underlying result is buffered, so it can be re-iterated by rewinding before repeating (the
+        // first pass reads the cursor as-is, so a forward-only JDBC result set still works once)
+        if (iterated) reader.reset();
+        iterated = true;
+        rowCount = 0;
+        ArrayList<IRubyObject> rows = block.isGiven() ? null : new ArrayList<>();
         IRubyObject row;
         while (!(row = reader.nextRow(runtime)).isNil()) {
-            streamedCount++;
-            if (block.isGiven()) {
-                block.yield(context, transform ? transformRow(context, row, asArray, symbolizeKeys) : row);
-            }
+            rowCount++;
+            IRubyObject out = transform ? transformRow(context, row, asArray, symbolizeKeys) : row;
+            if (block.isGiven()) block.yield(context, out);
+            else rows.add(out);
         }
-        streamingComplete = true;
-        close();
-
-        return runtime.newEmptyArray();
+        return block.isGiven() ? this : RubyArray.newArrayNoCopy(runtime, rows.toArray(new IRubyObject[0]));
     }
 
     /** Convert a buffered row to the per-call as: / symbolize_keys: format. */
@@ -139,9 +136,8 @@ public class Result extends RubyObject {
 
     @JRubyMethod(name = {"count", "size"})
     public RubyInteger count(ThreadContext context) {
-        // cached: total buffered rows
-        // streaming: rows drained so far (does not advance the stream)
-        return context.runtime.newFixnum(cachedRows != null ? cachedRows.length : streamedCount);
+        // cached: total buffered rows; otherwise: rows produced by the last iteration
+        return context.runtime.newFixnum(cachedRows != null ? cachedRows.length : rowCount);
     }
 
     @JRubyMethod
@@ -153,11 +149,6 @@ public class Result extends RubyObject {
     @JRubyMethod(name = "server_flags")
     public IRubyObject server_flags(ThreadContext context) {
         return context.nil;
-    }
-
-    private RuntimeException streamingError(Ruby runtime, String message) {
-        RubyClass error = runtime.getModule("Mysql2").getClass("Error");
-        return runtime.newRaiseException(error, message);
     }
 
     private void close() {
