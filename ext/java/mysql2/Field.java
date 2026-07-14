@@ -16,7 +16,7 @@ final class Field {
     public static final int ENUM_FLAG = 256;
     public static final int SET_FLAG = 2048;
     public static final int MYSQL2_BINARY_CHARSET = 63;
-    // mysql2 hardcodes this; char/varchar lengths are byte lengths divided by it.
+    // mysql2 hardcodes this; char/varchar lengths are byte lengths divided by it
     private static final long MAX_BYTES_PER_CHAR = 3;
 
     public static boolean isBinary(com.mysql.cj.result.Field field) {

@@ -7,10 +7,9 @@ import org.jruby.RubyString;
 import org.jruby.runtime.builtin.IRubyObject;
 
 /**
- * Materializes rows of a text-protocol result into Ruby objects, doing the hot
- * per-cell casting in Java (see {@link Caster}). Rows and column metadata come
- * from a {@link RowSource} (Connector/J protocol Resultset, or a JDBC ResultSet).
- * One instance per Mysql2::Result; Ruby drives it via nextRow() until it returns nil.
+ * Materializes rows of a text-protocol result into Ruby objects.
+ * Rows and column metadata come from a {@link RowSource}.
+ * One instance per Mysql2::Result; Ruby drives it via nextRow() until it returns nil
  */
 final class RowReader {
     private final RowSource source;
@@ -48,7 +47,7 @@ final class RowReader {
         }
     }
 
-    /** Next row as a RubyHash/RubyArray, or nil at end of result. */
+    /** Next row as a RubyHash/RubyArray, or nil at end of result */
     public IRubyObject nextRow(final Ruby runtime) {
         if (!source.next()) return runtime.getNil();
 
@@ -65,16 +64,16 @@ final class RowReader {
         return hash;
     }
 
-    /** Rewind to before the first row, so a non-streaming result can be re-iterated. */
-    void reset() {
+    /** Rewind to before the first row, so a non-streaming result can be re-iterated */
+    public void reset() {
         source.reset();
     }
 
-    void close() {
+    public void close() {
         source.close();
     }
 
-    /** Field names (Mysql2::Result#fields), always as frozen strings. */
+    /** Field names (Mysql2::Result#fields), always as frozen strings */
     IRubyObject[] fieldNames(final Ruby runtime) {
         IRubyObject[] names = new IRubyObject[count];
         for (int i = 0; i < count; i++) {
@@ -86,14 +85,13 @@ final class RowReader {
         return names;
     }
 
-    /** MySQL type descriptor strings (Mysql2::Result#field_types). */
+    /** MySQL type descriptor strings (Mysql2::Result#field_types) */
     IRubyObject[] fieldTypes(final Ruby runtime) {
         IRubyObject[] types = new IRubyObject[count];
         for (int i = 0; i < count; i++) types[i] = runtime.newString(source.typeName(i));
         return types;
     }
 
-    /** Field name as a Symbol or String, for rebuilding rows under per-call options. */
     IRubyObject key(Ruby runtime, int i, boolean symbolize) {
         final String fieldName = source.fieldName(i);
         return symbolize ? runtime.newSymbol(fieldName) : runtime.newString(fieldName);

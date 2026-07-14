@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets;
 
 import org.jcodings.Encoding;
 import org.jcodings.specific.ASCIIEncoding;
-import org.jcodings.specific.UTF8Encoding;
 import org.jruby.Ruby;
 import org.jruby.RubyString;
 import org.jruby.runtime.builtin.IRubyObject;
@@ -62,24 +61,23 @@ public final class Caster {
             case Field.TYPE_NEWDATE:
                 return parseDate(ctx, b);
             default:
-                return castString(ctx, b, field);
+                return asString(ctx, b, field);
         }
     }
 
-    /** cast:false -- every non-NULL value as a String with the field's encoding. */
+    /** cast:false -- every non-NULL value as a String with the field's encoding */
     public static IRubyObject raw(CastCtx ctx, TextRow row, int col, com.mysql.cj.result.Field field) {
         byte[] b = row.getBytes(col);
         if (b == null) return ctx.runtime.getNil();
-        return castString(ctx, b, field);
+        return asString(ctx, b, field);
     }
 
     /**
-     * String value tagged with the field's encoding (binary -> ASCII-8BIT),
-     * then transcoded to Encoding.default_internal when set. Mirrors mysql2's
-     * mysql2_set_field_string_encoding.
+     * String value tagged with the field's encoding, then transcoded.
+     * Mirrors mysql2's <code>mysql2_set_field_string_encoding</code>
      */
-    private static IRubyObject castString(CastCtx ctx, byte[] bytes, com.mysql.cj.result.Field field) {
-        if (Field.isBinary(field)) return newBinaryString(ctx.runtime, bytes);
+    private static RubyString asString(CastCtx ctx, byte[] bytes, com.mysql.cj.result.Field field) {
+        if (mysql2.Field.isBinary(field)) return newBinaryString(ctx.runtime, bytes);
 
         Encoding encoding = ctx.encodingFor(field);
         RubyString str = ctx.runtime.newString(new ByteList(bytes, encoding, false));
@@ -119,8 +117,11 @@ public final class Caster {
         if (sec < 0) return ctx.runtime.getNil();
         int usec = scanFraction(b, p);
 
-        long seconds = (long) year * 31557600L + (long) month * 2592000L + (long) day * 86400L
-                + (long) hour * 3600L + (long) min * 60L + sec;
+        long seconds = (long) year * 31557600L +
+                (long) month * 2592000L +
+                (long) day * 86400L +
+                (long) hour * 3600L +
+                (long) min * 60L + sec;
         if (seconds == 0) return ctx.runtime.getNil();
         if (month < 1 || day < 1) {
             throw ctx.runtime.newRaiseException(ctx.getErrorClass(), "Invalid date: " + new String(b, StandardCharsets.US_ASCII));
@@ -162,14 +163,8 @@ public final class Caster {
         return new ByteList(bytes, ASCIIEncoding.INSTANCE, false);
     }
 
-    // --- strings -------------------------------------------------------------
-
-    private static RubyString newString(Ruby runtime, byte[] bytes) {
-        return runtime.newString(new ByteList(bytes, UTF8Encoding.INSTANCE, false));
-    }
-
     private static RubyString newBinaryString(Ruby runtime, byte[] bytes) {
-        return runtime.newString(new ByteList(bytes, ASCIIEncoding.INSTANCE, false));
+        return RubyString.newString(runtime, wrapBytes(bytes));
     }
 
     // --- ascii scanning (emulates sscanf token counting) ---------------------

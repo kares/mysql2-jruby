@@ -2,12 +2,13 @@ package mysql2;
 
 import java.net.SocketTimeoutException;
 import java.sql.Connection;
-import java.sql.DriverManager; // TODO avoid
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLWarning;
 import java.sql.Statement;
 import java.util.Iterator;
+import java.util.Properties;
 
 import com.mysql.cj.NativeSession;
 import com.mysql.cj.exceptions.CJException;
@@ -45,18 +46,29 @@ import org.jruby.util.ByteList;
 public class Client extends RubyObject {
     public static final ObjectAllocator ALLOCATOR = Client::new;
 
+    private static final java.sql.Driver DRIVER = newDriver();
+
+    private static java.sql.Driver newDriver() {
+        try {
+            return new com.mysql.cj.jdbc.NonRegisteringDriver();
+        } catch (SQLException e) {
+            throw new IllegalStateException("could not create the Connector/J driver", e);
+        }
+    }
+
     private Connection connection;
     private RubyHash queryOptions;
     private long affectedRows;
     private long lastId;
     private String queryInfoString; // mysql_info() of the last query, or null
-    private long warningCount;      // server warnings from the last query
-    private int readTimeoutSeconds = -1; // configured :read_timeout, or -1 if unset
+    private int warningCount; // server warnings from the last query
+    private int readTimeoutSeconds = -1; // configured :read_timeout
     private Encoding clientEncoding = org.jcodings.specific.UTF8Encoding.INSTANCE;
 
     // Connection parameters retained so #ping can re-establish the connection when
     // reconnect: true (mysql2's mysql_ping auto-reconnect), re-running init_command etc.
-    private String jdbcUrl, jdbcUser, jdbcPass, connEncoding, connInitCommand;
+    private String jdbcUrl, connEncoding, connInitCommand;
+    private Properties jdbcProperties;
     private boolean connMultiStatements, connReconnect;
 
     private transient NativeSession nativeSession;
@@ -75,50 +87,28 @@ public class Client extends RubyObject {
         if (!optsArg.isNil() && !(optsArg instanceof RubyHash)) {
             throw error(context, "Options parameter must be a Hash");
         }
-        RubyHash opts = optsArg.isNil() ? RubyHash.newHash(runtime) : (RubyHash) optsArg;
+        RubyHash opts = optsArg.isNil() ? RubyHash.newSmallHash(runtime) : (RubyHash) optsArg;
 
-        this.queryOptions = defaultQueryOptions(context, getMetaClass())
+        this.queryOptions = defaultQueryOptions(context, null)
                 .merge(context, new IRubyObject[] { opts }, Block.NULL_BLOCK);
 
         String user = str(opt(context, opts, "username", "user"));
         String pass = str(opt(context, opts, "password", "pass"));
-        String host = orDefault(str(opt(context, opts, "host", "hostname")), "localhost");
-        IRubyObject portObj = opt(context, opts, "port");
-        int port = portObj.isNil() ? 3306 : portObj.convertToInteger().getIntValue();
-        String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
 
         String encoding = orDefault(strType(context, opt(context, opts, "encoding")), "utf8mb4");
         this.clientEncoding = resolveEncoding(runtime, encoding);
 
-        // NOTE: SSL is deliberately left off for now (useSSL=false)
-        StringBuilder url = new StringBuilder("jdbc:mysql://").append(host).append(':').append(port)
-                .append('/').append(database)
-                .append("?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8");
-        // mysql2 rejects negative timeouts (write_timeout has no JDBC analog, but is still validated).
-        Integer connectTimeout = requirePositive(context, intOpt(context, opts, "connect_timeout"), "connect_timeout");
-        if (connectTimeout != null) url.append("&connectTimeout=").append(connectTimeout * 1000L);
-        requirePositive(context, intOpt(context, opts, "write_timeout"), "write_timeout");
-        Integer readTimeout = requirePositive(context, intOpt(context, opts, "read_timeout"), "read_timeout");
-        if (readTimeout != null) {
-            this.readTimeoutSeconds = readTimeout;
-            // read_timeout > 0 maps to JDBC socketTimeout (seconds -> ms)
-            // read_timeout == 0 is applied after connect; JDBC treats socketTimeout=0 as "infinite",
-            // the opposite of mysql2's "fail unless the response is ready ~immediately
-            if (readTimeout > 0) url.append("&socketTimeout=").append(readTimeout * 1000L);
-        }
-        // NOTE: JDBC autoReconnect is deliberately not used; it's deprecated and fails to
-        // reconnect after the server drops the connection; #ping reconnects manually instead
-        if (bool(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
+        this.jdbcUrl = buildJdbcUrl(context, opts).toString();
+        this.jdbcProperties = new Properties();
+        if (user != null) jdbcProperties.setProperty("user", user);
+        if (pass != null) jdbcProperties.setProperty("password", pass);
 
-        this.jdbcUrl = url.toString();
-        this.jdbcUser = user;
-        this.jdbcPass = pass;
         this.connEncoding = encoding;
         this.connInitCommand = str(opt(context, opts, "init_command"));
         this.connMultiStatements = isMultiStatements(context, opts);
         this.connReconnect = bool(opt(context, opts, "reconnect"), false);
 
-        try { // TODO avoid DriverManager usage XXX
+        try {
             establishConnection();
         } catch (SQLException e) {
             throw errorFrom(context, e);
@@ -126,19 +116,47 @@ public class Client extends RubyObject {
         return context.nil;
     }
 
-    /** Open the JDBC connection and apply the mysql2-equivalent session setup. Reused by
-     *  #ping when reconnect: true, so init_command etc. are re-sent on reconnect. */
+    private StringBuilder buildJdbcUrl(ThreadContext context, RubyHash opts) {
+        String host = orDefault(str(opt(context, opts, "host", "hostname")), "localhost");
+        IRubyObject portObj = opt(context, opts, "port");
+        int port = portObj.isNil() ? 3306 : portObj.convertToInteger().getIntValue();
+        String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
+
+        // NOTE: SSL is deliberately left off for now (useSSL=false)
+        StringBuilder url = new StringBuilder("jdbc:mysql://").append(host).append(':').append(port)
+                .append('/').append(database)
+                .append("?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8");
+        // mysql2 rejects negative timeouts (write_timeout has no JDBC analog, but is still validated)
+        Integer connectTimeout = intOpt(context, opts, "connect_timeout", true);
+        if (connectTimeout != null) url.append("&connectTimeout=").append(connectTimeout * 1000L);
+        intOpt(context, opts, "write_timeout", true);
+        Integer readTimeout = intOpt(context, opts, "read_timeout", true);
+        if (readTimeout != null) {
+            this.readTimeoutSeconds = readTimeout;
+            // read_timeout > 0 maps to JDBC socketTimeout (seconds -> ms)
+            // read_timeout == 0 is applied after connect; JDBC treats socketTimeout = 0  as "infinite",
+            // the opposite of mysql2's "fail unless the response is ready ~immediately
+            if (readTimeout > 0) url.append("&socketTimeout=").append(readTimeout * 1000L);
+        }
+        // NOTE: JDBC autoReconnect is deliberately not used; it's deprecated and fails to
+        // reconnect after the server drops the connection; #ping reconnects manually instead
+        if (bool(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
+
+        return url;
+    }
+
+    /** Open the JDBC connection and apply the mysql2-equivalent session setup.
+     * Reused by #ping when reconnect: true, so init_command etc. are re-sent on reconnect.
+     */
     private void establishConnection() throws SQLException {
-        this.connection = DriverManager.getConnection(jdbcUrl, jdbcUser, jdbcPass);
+        this.connection = DRIVER.connect(jdbcUrl, jdbcProperties);
         this.nativeSession = null; // re-resolve for the new physical connection
-        // Make result strings come back in the client encoding (like mysql2's
-        // character_set_results), so field metadata reports that charset and
-        // getBytes() yields bytes we can tag correctly.
+        // Make result strings come back in the client encoding (like mysql2's character_set_results),
+        // so field metadata reports that charset and getBytes() yields bytes we can tag correctly
         try (Statement statement = connection.createStatement()) {
             statement.execute("SET character_set_results = " + sanitizeCharset(connEncoding));
         }
-        // flags: [MULTI_STATEMENTS] means "always on"; ActiveRecord then skips the
-        // per-batch set_server_option toggle, so enable it for the whole connection.
+
         if (connMultiStatements) {
             final NativeSession session = nativeSession();
             if (session != null) session.enableMultiQueries();
@@ -178,17 +196,27 @@ public class Client extends RubyObject {
     /** mysql2 requires timeouts to be non-negative; raise Mysql2::Error otherwise. */
     private static Integer requirePositive(ThreadContext context, Integer v, String name) {
         if (v != null && v < 0) {
-            throw error(context, name + " must be a positive integer, you passed " + v);
+            throw error(context, name + " must be a positive integer, got: " + v);
         }
         return v;
     }
 
     /** Integer option (seconds/count), or null when absent or non-numeric. */
-    private static Integer intOpt(ThreadContext context, RubyHash opts, String... names) {
-        IRubyObject v = opt(context, opts, names);
+    private static Integer intOpt(ThreadContext context, RubyHash opts, String name) {
+        IRubyObject v = opt(context, opts, name);
         if (v == null || v.isNil()) return null;
         if (v instanceof RubyInteger) return ((RubyInteger) v).getIntValue();
         return v.convertToInteger().getIntValue();
+    }
+
+    private static Integer intOpt(ThreadContext context, RubyHash opts, String name, boolean checkPositive) {
+        IRubyObject v = opt(context, opts, name);
+        if (v == null || v.isNil()) return null;
+        final int val = v.convertToInteger().getIntValue();
+        if (checkPositive && val < 0) {
+            throw error(context, name + " must be a positive integer, got: " + v);
+        }
+        return val;
     }
 
     @JRubyMethod
@@ -263,7 +291,7 @@ public class Client extends RubyObject {
         // send the query as raw bytes (in the connection encoding) rather than a decoded Java
         // String, so bytes the server can't map -- e.g. invalid UTF-8 -- reach it intact and are
         // echoed/scrubbed the way libmysqlclient sees them
-        byte[] sqlBytes = queryBytes(context, args[0]);
+        final byte[] sqlBytes = queryBytes(context, args[0]);
         try {
             NativeProtocol protocol = session.getProtocol();
             NativeMessageBuilder messageBuilder =
@@ -272,7 +300,8 @@ public class Client extends RubyObject {
                     messageBuilder.buildComQuery(protocol.getSharedSendPacket(), session, sqlBytes);
             final Resultset result = session.execSQL(
                     null,
-                    null, -1,
+                    null,
+                    -1,
                     packet,
                     false,
                     resultSetFactory(),
@@ -466,12 +495,15 @@ public class Client extends RubyObject {
         return context.nil;
     }
 
-    private static long countWarnings(Statement stmt) {
+    private static int countWarnings(final Statement statement) {
         try {
-            long n = 0;
-            java.sql.SQLWarning w = stmt.getWarnings();
-            while (w != null) { n++; w = w.getNextWarning(); }
-            return n;
+            int count = 0;
+            SQLWarning warnings = statement.getWarnings();
+            while (warnings != null) {
+                count++;
+                warnings = warnings.getNextWarning();
+            }
+            return count;
         } catch (SQLException e) {
             return 0;
         }
@@ -483,7 +515,7 @@ public class Client extends RubyObject {
     }
 
     @JRubyMethod(name = "query_info")
-    public IRubyObject query_info(ThreadContext context) {
+    public RubyHash query_info(ThreadContext context) {
         Ruby runtime = context.runtime;
         RubyHash info = RubyHash.newHash(runtime);
         if (queryInfoString == null) return info;
