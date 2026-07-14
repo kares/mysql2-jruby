@@ -55,7 +55,7 @@ public class Statement extends RubyObject {
             ResultSetMetaData md = statement.getMetaData();
             return context.runtime.newFixnum(md == null ? 0 : md.getColumnCount());
         } catch (SQLException e) {
-            throw client.errorFromSQL(context, e);
+            throw client.errorFrom(context, e);
         }
     }
 
@@ -86,7 +86,7 @@ public class Statement extends RubyObject {
 
             return context.nil;
         } catch (SQLException e) {
-            throw client.errorFromSQL(context, e);
+            throw client.errorFrom(context, e);
         }
     }
 
@@ -100,7 +100,7 @@ public class Statement extends RubyObject {
             for (int i = 0; i < names.length; i++) names[i] = runtime.newString(md.getColumnLabel(i + 1));
             return runtime.newArray(names);
         } catch (SQLException e) {
-            throw client.errorFromSQL(context, e);
+            throw client.errorFrom(context, e);
         }
     }
 
@@ -122,7 +122,7 @@ public class Statement extends RubyObject {
                 closed = true;
             }
         } catch (SQLException e) {
-            throw client.errorFromSQL(context, e);
+            throw client.errorFrom(context, e);
         }
         return context.nil;
     }

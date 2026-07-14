@@ -9,6 +9,19 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Iterator;
 
+import com.mysql.cj.NativeSession;
+import com.mysql.cj.exceptions.CJException;
+import com.mysql.cj.jdbc.ConnectionImpl;
+import com.mysql.cj.jdbc.JdbcStatement;
+import com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping;
+import com.mysql.cj.protocol.ProtocolEntityFactory;
+import com.mysql.cj.protocol.Resultset;
+import com.mysql.cj.protocol.a.NativeMessageBuilder;
+import com.mysql.cj.protocol.a.NativePacketPayload;
+import com.mysql.cj.protocol.a.NativeProtocol;
+import com.mysql.cj.protocol.a.ResultsetFactory;
+
+import org.jcodings.Encoding;
 import org.jruby.Ruby;
 import org.jruby.RubyArray;
 import org.jruby.RubyClass;
@@ -39,14 +52,15 @@ public class Client extends RubyObject {
     private String queryInfoString; // mysql_info() of the last query, or null
     private long warningCount;      // server warnings from the last query
     private int readTimeoutSeconds = -1; // configured :read_timeout, or -1 if unset
-    private org.jcodings.Encoding clientEncoding = org.jcodings.specific.UTF8Encoding.INSTANCE;
+    private Encoding clientEncoding = org.jcodings.specific.UTF8Encoding.INSTANCE;
 
     // Connection parameters retained so #ping can re-establish the connection when
     // reconnect: true (mysql2's mysql_ping auto-reconnect), re-running init_command etc.
     private String jdbcUrl, jdbcUser, jdbcPass, connEncoding, connInitCommand;
     private boolean connMultiStatements, connReconnect;
 
-    transient com.mysql.cj.NativeSession nativeSession; // for runtime COM_SET_OPTION toggles
+    private transient NativeSession nativeSession;
+    private transient ProtocolEntityFactory<Resultset, NativePacketPayload> resultSetFactory;
 
     public Client(Ruby runtime, RubyClass klass) {
         super(runtime, klass);
@@ -70,31 +84,30 @@ public class Client extends RubyObject {
         String pass = str(opt(context, opts, "password", "pass"));
         String host = orDefault(str(opt(context, opts, "host", "hostname")), "localhost");
         IRubyObject portObj = opt(context, opts, "port");
-        int port = portObj.isNil() ? 3306 : (int) portObj.convertToInteger().getLongValue();
+        int port = portObj.isNil() ? 3306 : portObj.convertToInteger().getIntValue();
         String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
 
         String encoding = orDefault(strType(context, opt(context, opts, "encoding")), "utf8mb4");
         this.clientEncoding = resolveEncoding(runtime, encoding);
 
-        // JDBC connection properties. SSL is deliberately left off for now (useSSL=false);
-        // timeouts are seconds in mysql2 but milliseconds in JDBC.
+        // NOTE: SSL is deliberately left off for now (useSSL=false)
         StringBuilder url = new StringBuilder("jdbc:mysql://").append(host).append(':').append(port)
                 .append('/').append(database)
                 .append("?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8");
         // mysql2 rejects negative timeouts (write_timeout has no JDBC analog, but is still validated).
-        Integer connectTimeout = requirePositiveTimeout(context, intOpt(context, opts, "connect_timeout"), "connect_timeout");
+        Integer connectTimeout = requirePositive(context, intOpt(context, opts, "connect_timeout"), "connect_timeout");
         if (connectTimeout != null) url.append("&connectTimeout=").append(connectTimeout * 1000L);
-        requirePositiveTimeout(context, intOpt(context, opts, "write_timeout"), "write_timeout");
-        Integer readTimeout = requirePositiveTimeout(context, intOpt(context, opts, "read_timeout"), "read_timeout");
+        requirePositive(context, intOpt(context, opts, "write_timeout"), "write_timeout");
+        Integer readTimeout = requirePositive(context, intOpt(context, opts, "read_timeout"), "read_timeout");
         if (readTimeout != null) {
             this.readTimeoutSeconds = readTimeout;
-            // read_timeout > 0 maps to JDBC socketTimeout (seconds -> ms). read_timeout == 0
-            // is applied after connect (below): JDBC treats socketTimeout=0 as "infinite",
-            // the opposite of mysql2's "fail unless the response is ready ~immediately".
+            // read_timeout > 0 maps to JDBC socketTimeout (seconds -> ms)
+            // read_timeout == 0 is applied after connect; JDBC treats socketTimeout=0 as "infinite",
+            // the opposite of mysql2's "fail unless the response is ready ~immediately
             if (readTimeout > 0) url.append("&socketTimeout=").append(readTimeout * 1000L);
         }
-        // NB: JDBC autoReconnect is deliberately not used -- it's deprecated and fails to
-        // reconnect after the server drops the connection; #ping reconnects manually instead.
+        // NOTE: JDBC autoReconnect is deliberately not used; it's deprecated and fails to
+        // reconnect after the server drops the connection; #ping reconnects manually instead
         if (bool(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
 
         this.jdbcUrl = url.toString();
@@ -105,10 +118,10 @@ public class Client extends RubyObject {
         this.connMultiStatements = isMultiStatements(context, opts);
         this.connReconnect = bool(opt(context, opts, "reconnect"), false);
 
-        try { // TODO avoid DriverManager usage
+        try { // TODO avoid DriverManager usage XXX
             establishConnection();
         } catch (SQLException e) {
-            throw errorFromSQL(context, e);
+            throw errorFrom(context, e);
         }
         return context.nil;
     }
@@ -127,7 +140,7 @@ public class Client extends RubyObject {
         // flags: [MULTI_STATEMENTS] means "always on"; ActiveRecord then skips the
         // per-batch set_server_option toggle, so enable it for the whole connection.
         if (connMultiStatements) {
-            com.mysql.cj.NativeSession session = nativeSession();
+            final NativeSession session = nativeSession();
             if (session != null) session.enableMultiQueries();
         }
         if (connInitCommand != null) {
@@ -162,8 +175,8 @@ public class Client extends RubyObject {
         return false;
     }
 
-    /** mysql2 requires timeouts to be non-negative; raise Mysql2::Error otherwise. Returns v. */
-    private Integer requirePositiveTimeout(ThreadContext context, Integer v, String name) {
+    /** mysql2 requires timeouts to be non-negative; raise Mysql2::Error otherwise. */
+    private static Integer requirePositive(ThreadContext context, Integer v, String name) {
         if (v != null && v < 0) {
             throw error(context, name + " must be a positive integer, you passed " + v);
         }
@@ -174,12 +187,8 @@ public class Client extends RubyObject {
     private static Integer intOpt(ThreadContext context, RubyHash opts, String... names) {
         IRubyObject v = opt(context, opts, names);
         if (v == null || v.isNil()) return null;
-        if (v instanceof RubyInteger) return (int) ((org.jruby.RubyInteger) v).getLongValue();
-        try {
-            return v.convertToInteger().getIntValue();
-        } catch (RuntimeException e) {
-            return null;
-        }
+        if (v instanceof RubyInteger) return ((RubyInteger) v).getIntValue();
+        return v.convertToInteger().getIntValue();
     }
 
     @JRubyMethod
@@ -187,7 +196,7 @@ public class Client extends RubyObject {
         try {
             if (connection != null && !connection.isClosed()) connection.close();
         } catch (SQLException e) {
-            throw errorFromSQL(context, e);
+            throw errorFrom(context, e);
         }
         return context.nil;
     }
@@ -208,8 +217,8 @@ public class Client extends RubyObject {
         } catch (SQLException e) {
             // fall through to reconnect handling
         }
-        // Connection is down. mysql2's mysql_ping reconnects when reconnect: true, re-running
-        // init_command; Connector/J's own autoReconnect is broken, so we re-establish manually.
+        // connection is down: mysql2's mysql_ping reconnects when reconnect: true, re-running
+        // init_command; Connector/J's own autoReconnect isn't reliable, so re-establish manually
         if (connReconnect) {
             try {
                 establishConnection();
@@ -224,13 +233,13 @@ public class Client extends RubyObject {
     // mysql_thread_id: the server's id for this connection (used by KILL etc.).
     @JRubyMethod(name = "thread_id")
     public IRubyObject thread_id(ThreadContext context) {
-        com.mysql.cj.NativeSession session = nativeSession();
+        final NativeSession session = nativeSession();
         if (session != null) return context.runtime.newFixnum(session.getThreadId());
         try (Statement s = connection.createStatement();
              ResultSet rs = s.executeQuery("SELECT CONNECTION_ID()")) {
             return context.runtime.newFixnum(rs.next() ? rs.getLong(1) : 0);
         } catch (SQLException e) {
-            throw errorFromSQL(context, e);
+            throw errorFrom(context, e);
         }
     }
 
@@ -248,40 +257,44 @@ public class Client extends RubyObject {
                 ? (RubyHash) queryOptions.callMethod(context, "merge", args[1])
                 : queryOptions;
 
-        com.mysql.cj.NativeSession session = nativeSession();
-        if (session == null) return queryViaJdbc(context, args[0], merged);
+        final NativeSession session = nativeSession();
+        assert session != null;
 
-        // Send the query as raw bytes (in the connection encoding) rather than a decoded Java
+        // send the query as raw bytes (in the connection encoding) rather than a decoded Java
         // String, so bytes the server can't map -- e.g. invalid UTF-8 -- reach it intact and are
-        // echoed/scrubbed the way libmysqlclient sees them. Reading rows straight off Connector/J's
-        // protocol Resultset (Row#getBytes) also avoids the JDBC decode/box layer the caster undoes.
+        // echoed/scrubbed the way libmysqlclient sees them
         byte[] sqlBytes = queryBytes(context, args[0]);
         try {
-            com.mysql.cj.protocol.a.NativeProtocol protocol = session.getProtocol();
-            com.mysql.cj.protocol.a.NativeMessageBuilder mb =
+            NativeProtocol protocol = session.getProtocol();
+            NativeMessageBuilder messageBuilder =
                     (com.mysql.cj.protocol.a.NativeMessageBuilder) protocol.getMessageBuilder();
-            com.mysql.cj.protocol.a.NativePacketPayload packet =
-                    mb.buildComQuery(protocol.getSharedSendPacket(), session, sqlBytes);
-            com.mysql.cj.protocol.a.ResultsetFactory factory = new com.mysql.cj.protocol.a.ResultsetFactory(
-                    com.mysql.cj.protocol.Resultset.Type.FORWARD_ONLY,
-                    com.mysql.cj.protocol.Resultset.Concurrency.READ_ONLY);
-            com.mysql.cj.protocol.Resultset rs =
-                    session.execSQL(null, null, -1, packet, false, factory, null, false);
+            NativePacketPayload packet =
+                    messageBuilder.buildComQuery(protocol.getSharedSendPacket(), session, sqlBytes);
+            final Resultset result = session.execSQL(
+                    null,
+                    null, -1,
+                    packet,
+                    false,
+                    resultSetFactory(),
+                    null,
+                    false
+            );
 
-            String info = rs.getServerInfo();
+            String info = result.getServerInfo();
             this.queryInfoString = (info == null || info.isEmpty()) ? null : info;
             this.warningCount = protocol.getWarningCount();
 
-            if (rs.hasRows()) {
+            if (result.hasRows()) {
                 this.affectedRows = 0;
                 this.lastId = 0;
-                return buildResult(context, new CJRowSource(rs), merged, false);
+                return buildResult(context, new CJRowSource(result), merged, false);
             }
-            this.affectedRows = Math.max(rs.getUpdateCount(), 0);
-            this.lastId = Math.max(rs.getUpdateID(), 0);
+            this.affectedRows = Math.max(result.getUpdateCount(), 0);
+            this.lastId = Math.max(result.getUpdateID(), 0);
+
             return context.nil;
-        } catch (com.mysql.cj.exceptions.CJException e) {
-            throw errorFromCJ(context, e);
+        } catch (CJException e) {
+            throw errorFrom(context, e);
         }
     }
 
@@ -304,7 +317,7 @@ public class Client extends RubyObject {
             return context.nil;
         } catch (SQLException e) {
             try { if (stmt != null) stmt.close(); } catch (SQLException ignore) { }
-            throw errorFromSQL(context, e);
+            throw errorFrom(context, e);
         }
     }
 
@@ -324,7 +337,7 @@ public class Client extends RubyObject {
             RubyClass Statement = context.runtime.getModule("Mysql2").getClass("Statement");
             return new mysql2.Statement(context.runtime, Statement, this, ps);
         } catch (SQLException e) {
-            throw errorFromSQL(context, e);
+            throw errorFrom(context, e);
         }
     }
 
@@ -394,9 +407,9 @@ public class Client extends RubyObject {
     // applied, false for anything we don't handle (matching mysql2's boolean result).
     @JRubyMethod(name = "set_server_option")
     public IRubyObject set_server_option(ThreadContext context, IRubyObject value) {
-        long opt = value.convertToInteger().getLongValue();
-        com.mysql.cj.NativeSession session = nativeSession();
+        final NativeSession session = nativeSession();
         if (session == null) return context.fals;
+        final long opt = value.convertToInteger().getLongValue();
         try {
             if (opt == 0) {            // MYSQL_OPTION_MULTI_STATEMENTS_ON
                 session.enableMultiQueries();
@@ -419,16 +432,27 @@ public class Client extends RubyObject {
         return context.nil;
     }
 
-    /** Connector/J NativeSession for runtime COM_SET_OPTION toggles; cached, null if unavailable. */
-    private com.mysql.cj.NativeSession nativeSession() {
+    private NativeSession nativeSession() {
         if (nativeSession == null && connection != null) {
             try {
-                nativeSession = connection.unwrap(com.mysql.cj.jdbc.ConnectionImpl.class).getSession();
-            } catch (SQLException | RuntimeException ignore) {
-                // non-Connector/J driver, or a proxy that won't unwrap: leave null
+                nativeSession = connection.unwrap(ConnectionImpl.class).getSession();
+            } catch (SQLException ex) {
+                throw errorFrom(getRuntime().getCurrentContext(), ex);
+            } catch (RuntimeException ex) {
+                throw (RuntimeException) error(getRuntime().getCurrentContext(), ex.getMessage()).initCause(ex);
             }
         }
         return nativeSession;
+    }
+
+    private ProtocolEntityFactory<Resultset, NativePacketPayload> resultSetFactory() {
+        if (resultSetFactory == null) {
+            resultSetFactory = new ResultsetFactory(
+                    Resultset.Type.FORWARD_ONLY,
+                    Resultset.Concurrency.READ_ONLY
+            );
+        }
+        return resultSetFactory;
     }
 
     // in mysql2 prevents a forked child's GC from closing parent's shared MySQL socket
@@ -474,14 +498,11 @@ public class Client extends RubyObject {
         return info;
     }
 
-    /** MySQL's mysql_info() for the last query, via Connector/J's internal result
-     *  (getResultSetInternal() is public on JdbcStatement; the returned type
-     *  extends com.mysql.cj.protocol.Resultset which exposes getServerInfo()). */
+    /** MySQL's mysql_info() for the last query, via Connector/J's internal result. */
     private static String extractServerInfo(Statement stmt) {
-        if (!(stmt instanceof com.mysql.cj.jdbc.JdbcStatement)) return null;
+        if (!(stmt instanceof JdbcStatement)) return null;
         try {
-            com.mysql.cj.jdbc.result.ResultSetInternalMethods rs =
-                    ((com.mysql.cj.jdbc.JdbcStatement) stmt).getResultSetInternal();
+            Resultset rs = ((JdbcStatement) stmt).getResultSetInternal();
             if (rs == null) return null;
             String info = rs.getServerInfo();
             return (info == null || info.isEmpty()) ? null : info;
@@ -496,7 +517,7 @@ public class Client extends RubyObject {
             String db = connection.getCatalog();
             return (db == null || db.isEmpty()) ? context.nil : context.runtime.newString(db);
         } catch (SQLException e) {
-            throw errorFromSQL(context, e);
+            throw errorFrom(context, e);
         }
     }
 
@@ -508,7 +529,7 @@ public class Client extends RubyObject {
             connection.unwrap(com.mysql.cj.jdbc.ConnectionImpl.class)
                     .setDatabase(db.convertToString().asJavaString());
         } catch (SQLException e) {
-            throw errorFromSQL(context, e);
+            throw errorFrom(context, e);
         }
         return db;
     }
@@ -524,7 +545,7 @@ public class Client extends RubyObject {
             info.fastASet(runtime.newSymbol("version"), encodedString(context, version));
             return info;
         } catch (SQLException e) {
-            throw errorFromSQL(context, e);
+            throw errorFrom(context, e);
         }
     }
 
@@ -575,7 +596,7 @@ public class Client extends RubyObject {
             return infoHash(context.runtime, md.getDriverMajorVersion(),
                     md.getDriverMinorVersion(), md.getDriverVersion());
         } catch (SQLException e) {
-            throw errorFromSQL(context, e);
+            throw errorFrom(context, e);
         }
     }
 
@@ -755,15 +776,15 @@ public class Client extends RubyObject {
         return context.runtime.newRaiseException(errorClass(context.runtime), msg);
     }
 
-    RuntimeException errorFromSQL(ThreadContext context, SQLException e) {
+    RuntimeException errorFrom(ThreadContext context, SQLException e) {
         return buildError(context, e.getErrorCode(), e.getSQLState(), e.getMessage(), isSocketTimeout(e));
     }
 
-    RuntimeException errorFromCJ(ThreadContext context, com.mysql.cj.exceptions.CJException e) {
+    RuntimeException errorFrom(ThreadContext context, CJException e) {
         // Reuse Connector/J's own CJException -> SQLException mapping so we get the standard
         // SQLState (e.g. 08S01 for a communications link failure) that error.rb routes to
-        // ConnectionError, rather than the generic S1000 the raw CJException reports.
-        return errorFromSQL(context, com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(e));
+        // ConnectionError, rather than the generic S1000 the raw CJException reports
+        return errorFrom(context, SQLExceptionsMapping.translateException(e));
     }
 
     private RaiseException buildError(ThreadContext context, int code, String sqlStateStr, String message, boolean timeout) {
