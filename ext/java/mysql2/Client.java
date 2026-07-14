@@ -73,7 +73,7 @@ public class Client extends RubyObject {
         int port = portObj.isNil() ? 3306 : (int) portObj.convertToInteger().getLongValue();
         String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
 
-        String encoding = orDefault(str(opt(context, opts, "encoding")), "utf8mb4");
+        String encoding = orDefault(strType(context, opt(context, opts, "encoding")), "utf8mb4");
         this.clientEncoding = resolveEncoding(runtime, encoding);
 
         // JDBC connection properties. SSL is deliberately left off for now (useSSL=false);
@@ -826,6 +826,16 @@ public class Client extends RubyObject {
 
     static String str(IRubyObject val) {
         return (val == null || val.isNil()) ? null : val.asJavaString();
+    }
+
+    /** Like {@link #str} but strict: a non-nil, non-String value raises TypeError
+     *  (mysql2's Check_Type(value, T_STRING) on the encoding option). */
+    static String strType(ThreadContext context, IRubyObject val) {
+        if (val == null || val.isNil()) return null;
+        if (!(val instanceof RubyString)) {
+            throw context.runtime.newTypeError(val, context.runtime.getString());
+        }
+        return val.asJavaString();
     }
 
     static String orDefault(String val, String defaultVal) {
