@@ -32,7 +32,10 @@ final class CJRowSource implements RowSource {
     @Override
     public String fieldName(final int col) {
         final com.mysql.cj.result.Field cjField = columnDefinition.getFields()[col];
-        return cjField.getName();
+        // Connector/J returns null for a zero-length column label, which it produces
+        // when the name bytes can't be decoded (e.g. an invalid-encoding SELECT literal).
+        final String name = cjField.getName();
+        return name == null ? "" : name;
     }
 
     @Override
