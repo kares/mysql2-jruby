@@ -1,5 +1,7 @@
 package mysql2;
 
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -7,10 +9,11 @@ import org.jcodings.Encoding;
 import org.jcodings.specific.UTF8Encoding;
 import org.jruby.Ruby;
 import org.jruby.RubyClass;
+import org.jruby.RubyFixnum;
 import org.jruby.RubyTime;
+import org.jruby.ext.bigdecimal.RubyBigDecimal;
 import org.jruby.ext.date.RubyDate;
 import org.jruby.ext.date.RubyDateTime;
-import org.jruby.runtime.Helpers;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 
@@ -24,38 +27,39 @@ public final class CastCtx {
     final ThreadContext context;
     final boolean castBooleans;
     final boolean dbTimezoneLocal;
-    final String appTimezone; // "local" | "utc" | null
+    final Boolean appTimezoneLocal; // "local" | "utc" | null
 
-    final RubyClass dateTimeClass;
     final RubyClass errorClass;
-    final IRubyObject topSelf;      // receiver for Kernel#BigDecimal
-    final IRubyObject decimalZero;  // BigDecimal("0.0")
-    final IRubyObject floatZero;    // 0.0
-    final IRubyObject utcOffset;    // 0
-    final IRubyObject localOffset;  // Rational from Mysql2::Client.local_offset
 
     final Encoding defaultInternal; // Encoding.default_internal, or null
     private final Map<String, Encoding> encCache = new HashMap<>();
 
     public CastCtx(Ruby runtime, boolean castBooleans, String dbTimezone, String appTimezone,
-                   RubyClass errorClass, IRubyObject localOffset) {
+                   RubyClass errorClass) {
         this.runtime = runtime;
         this.context = runtime.getCurrentContext();
         this.castBooleans = castBooleans;
         this.dbTimezoneLocal = (dbTimezone == null || dbTimezone.isEmpty()) ? true : dbTimezone.equals("local");
-        this.appTimezone = appTimezone;
+        this.appTimezoneLocal = appTimezone == null ? null : appTimezone.equals("local");
         this.errorClass = errorClass;
-        this.dateTimeClass = (RubyClass) runtime.getObject().getConstant("DateTime");
-        this.topSelf = runtime.getTopSelf();
-        this.decimalZero = bigDecimal(runtime.newString("0.0"));
-        this.floatZero = runtime.newFloat(0.0);
-        this.utcOffset = runtime.newFixnum(0);
-        this.localOffset = localOffset;
+
         this.defaultInternal = runtime.getDefaultInternalEncoding();
+
+        this.floatZero = runtime.newFloat(0);
     }
 
-    IRubyObject bigDecimal(IRubyObject arg) {
-        return Helpers.invoke(context, topSelf, "BigDecimal", arg);
+    private transient final IRubyObject floatZero;
+
+    IRubyObject floatZero() {
+        return floatZero;
+    }
+
+    IRubyObject bigDecimal(byte[] val) {
+        return new RubyBigDecimal(runtime, new BigDecimal(new String(val, StandardCharsets.US_ASCII)));
+    }
+
+    IRubyObject bigDecimalZero() {
+        return new RubyBigDecimal(runtime, BigDecimal.ZERO);
     }
 
     IRubyObject newDate(int year, int month, int day) {
@@ -77,9 +81,7 @@ public final class CastCtx {
         return dateClass;
     }
 
-    RubyTime newTime(int year, int month, int day,
-                        int hour, int minute, int second,
-                        long usec) {
+    RubyTime newTime(int year, int month, int day, int hour, int minute, int second, long usec) {
         if (dbTimezoneLocal) {
             return RubyTime.local(context, runtime.getTime(), new IRubyObject[] {
                     runtime.newFixnum(year), runtime.newFixnum(month), runtime.newFixnum(day),
@@ -92,13 +94,53 @@ public final class CastCtx {
                 runtime.newFixnum(usec) });
     }
 
-    RubyDateTime newDateTime(int year, int month, int day,
-                             int hour, int minute, int second) {
-        IRubyObject offset = dbTimezoneLocal ? localOffset : utcOffset;
-        return RubyDateTime.civil(context, dateTimeClass, new IRubyObject[] {
+    IRubyObject newTimeInAppZone(int year, int month, int day, int hour, int minute, int second, long usec) {
+        RubyTime time = newTime(year, month, day, hour, minute, second, usec);
+        if (appTimezoneLocal == null) return time;
+        if (appTimezoneLocal) return time.localtime(context); // time.localtime
+        return time.gmtime(context); // time.utc
+    }
+
+    private transient RubyClass dateTimeClass;
+
+    private RubyClass getDateTimeClass() {
+        if (dateTimeClass == null) {
+            this.dateTimeClass = (RubyClass) runtime.getObject().getConstant("DateTime");
+        }
+        return dateTimeClass;
+    }
+
+    RubyDateTime newDateTime(int year, int month, int day, int hour, int min, int sec) {
+        return RubyDateTime.civil(context, getDateTimeClass(), new IRubyObject[] {
                 runtime.newFixnum(year), runtime.newFixnum(month), runtime.newFixnum(day),
-                runtime.newFixnum(hour), runtime.newFixnum(minute), runtime.newFixnum(second),
-                offset });
+                runtime.newFixnum(hour), runtime.newFixnum(min), runtime.newFixnum(sec),
+                dbOffset() });
+    }
+
+    IRubyObject newDateTimeInAppZone(int year, int month, int day, int hour, int min, int sec) {
+        RubyDateTime time = newDateTime(year, month, day, hour, min, sec);
+        if (appTimezoneLocal == null) return time;
+        IRubyObject[] appOffset = appTimezoneLocal ?
+                new IRubyObject[] { localOffset() } : IRubyObject.NULL_ARRAY;
+        return time.new_offset(context, appOffset);
+    }
+
+    private transient IRubyObject dbOffset;
+
+    IRubyObject dbOffset() {
+        if (dbOffset == null) {
+            dbOffset = dbTimezoneLocal ? localOffset() : RubyFixnum.zero(runtime);
+        }
+        return dbOffset;
+    }
+
+    private transient IRubyObject localOffset;
+
+    IRubyObject localOffset() {
+        if (localOffset == null) {
+            localOffset = Client.localOffset(context);
+        }
+        return localOffset;
     }
 
     /** Ruby encoding for a string field, from the driver's charset name (cached). */

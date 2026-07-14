@@ -6,8 +6,6 @@ import org.jcodings.specific.ASCIIEncoding;
 import org.jcodings.specific.UTF8Encoding;
 import org.jruby.Ruby;
 import org.jruby.RubyString;
-import org.jruby.RubyTime;
-import org.jruby.ext.date.RubyDateTime;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
 import org.jruby.util.ConvertBytes;
@@ -46,12 +44,12 @@ public final class Caster {
             case Field.TYPE_DECIMAL:
             case Field.TYPE_NEWDECIMAL:
                 if (field.decimals == 0) return parseInteger(runtime, b);
-                if (parseDouble(b) == 0.0) return ctx.decimalZero;
-                return ctx.bigDecimal(runtime.newString(new String(b, StandardCharsets.US_ASCII)));
+                if (parseDouble(b) == 0.0) return ctx.bigDecimalZero();
+                return ctx.bigDecimal(b);
             case Field.TYPE_FLOAT:
             case Field.TYPE_DOUBLE: {
                 double d = parseDouble(b);
-                return d == 0.0 ? ctx.floatZero : runtime.newFloat(d);
+                return d == 0.0 ? ctx.floatZero() : runtime.newFloat(d);
             }
             case Field.TYPE_TIME:
                 return parseTime(ctx, b);
@@ -100,7 +98,7 @@ public final class Caster {
         int sec = scanUInt(b, p, 2);
         if (sec < 0) return ctx.runtime.getNil();
         int usec = scanFraction(b, p);
-        return buildTime(ctx, 2000, 1, 1, hour, min, sec, usec);
+        return ctx.newTimeInAppZone(2000, 1, 1, hour, min, sec, usec);
     }
 
     private static IRubyObject parseDateTime(CastCtx ctx, byte[] b) {
@@ -126,9 +124,9 @@ public final class Caster {
             throw ctx.runtime.newRaiseException(ctx.errorClass, "Invalid date: " + new String(b, StandardCharsets.US_ASCII));
         }
         if (seconds < MYSQL2_MIN_TIME || seconds > MYSQL2_MAX_TIME) {
-            return buildDateTime(ctx, year, month, day, hour, min, sec);
+            return ctx.newDateTimeInAppZone(year, month, day, hour, min, sec);
         }
-        return buildTime(ctx, year, month, day, hour, min, sec, usec);
+        return ctx.newTimeInAppZone(year, month, day, hour, min, sec, usec);
     }
 
     private static IRubyObject parseDate(CastCtx ctx, byte[] b) {
@@ -144,20 +142,6 @@ public final class Caster {
             throw ctx.runtime.newRaiseException(ctx.errorClass, "Invalid date: " + new String(b, StandardCharsets.US_ASCII));
         }
         return ctx.newDate(year, month, day);
-    }
-
-    private static IRubyObject buildTime(CastCtx ctx, int y, int mo, int d, int h, int mi, int s, int usec) {
-        RubyTime time = ctx.newTime(y, mo, d, h, mi, s, usec);
-        if (ctx.appTimezone == null) return time;
-        if (ctx.appTimezone.equals("local")) return time.localtime(ctx.context); // time.localtime
-        return time.gmtime(ctx.context); // time.utc
-    }
-
-    private static IRubyObject buildDateTime(CastCtx ctx, int y, int mo, int d, int h, int mi, int s) {
-        RubyDateTime val = ctx.newDateTime(y, mo, d, h, mi, s);
-        if (ctx.appTimezone == null) return val;
-        IRubyObject appOffset = ctx.appTimezone.equals("local") ? ctx.localOffset : ctx.utcOffset;
-        return val.new_offset(ctx.context, new IRubyObject[]{ appOffset }); // val.new_offset(appOffset)
     }
 
     // --- numeric -------------------------------------------------------------

@@ -30,13 +30,12 @@ final class RowReader {
                      boolean symbolizeKeys,
                      String dbTimezone,
                      String appTimezone,
-                     RubyClass errorClass,
-                     IRubyObject localOffset) {
+                     RubyClass errorClass) {
         this.source = source;
         this.asArray = asArray;
         this.symbolizeKeys = symbolizeKeys;
         this.cast = cast;
-        this.ctx = new CastCtx(runtime, castBool, dbTimezone, appTimezone, errorClass, localOffset);
+        this.ctx = new CastCtx(runtime, castBool, dbTimezone, appTimezone, errorClass);
 
         this.fields = source.fields();
         this.count = fields.length;

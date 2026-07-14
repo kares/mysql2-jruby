@@ -1,5 +1,6 @@
 package mysql2;
 
+import java.net.SocketTimeoutException;
 import java.sql.Connection;
 import java.sql.DriverManager; // TODO avoid
 import java.sql.PreparedStatement;
@@ -15,7 +16,9 @@ import org.jruby.RubyException;
 import org.jruby.RubyHash;
 import org.jruby.RubyInteger;
 import org.jruby.RubyObject;
+import org.jruby.RubyRational;
 import org.jruby.RubyString;
+import org.jruby.RubyTime;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.exceptions.RaiseException;
 import org.jruby.runtime.Block;
@@ -337,8 +340,7 @@ public class Client extends RubyObject {
                 bool(hash(context, merged, "symbolize_keys"), false),
                 orDefault(str(hash(context, merged, "database_timezone")), "local"),
                 str(hash(context, merged, "application_timezone")),
-                errorClass(runtime),
-                localOffset(context, null));
+                errorClass(runtime));
         boolean cacheRows = bool(hash(context, merged, "cache_rows"), true);
         RubyClass resultClass = runtime.getModule("Mysql2").getClass("Result");
         return new Result(runtime, resultClass, reader, cacheRows, fromStatement);
@@ -629,10 +631,17 @@ public class Client extends RubyObject {
     /** Local timezone offset as a day fraction (Rational); matches mysql2 */
     @JRubyMethod(meta = true, name = "local_offset")
     public static IRubyObject localOffset(ThreadContext context, IRubyObject self) {
-        Ruby runtime = context.runtime;
-        IRubyObject time = runtime.getTime().callMethod(context, "local", runtime.newFixnum(2010));
-        IRubyObject offset = time.callMethod(context, "utc_offset").callMethod(context, "to_r");
-        return offset.callMethod(context, "/", runtime.newFixnum(86400));
+        return localOffset(context);
+    }
+
+    // 2010-01-01 UTC: a fixed winter reference so the offset is the zone's standard (non-DST)
+    // offset, stable year-round -- matches mysql2's Time.local(2010).utc_offset.
+    private static final long LOCAL_OFFSET_REF_MILLIS = 1262304000000L;
+
+    static IRubyObject localOffset(ThreadContext context) {
+        final Ruby runtime = context.runtime;
+        int offset = RubyTime.getLocalTimeZone(runtime).getOffset(LOCAL_OFFSET_REF_MILLIS) / 1000;
+        return RubyRational.newRationalCanonicalize(context, offset, 86400);
     }
 
     /** Define Mysql2::Client connection-flag / SSL / session-track constants */
@@ -758,22 +767,22 @@ public class Client extends RubyObject {
         return errorFromSQL(context, com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping.translateException(e));
     }
 
-    private RuntimeException buildError(ThreadContext context, int code, String sqlStateStr, String message, boolean timeout) {
+    private RaiseException buildError(ThreadContext context, int code, String sqlStateStr, String message, boolean timeout) {
         Ruby runtime = context.runtime;
         // A vendor code of 0 means the driver raised it, not the server (no MySQL errno);
-        // mysql2 reports nil there, and ActiveRecord keys its "not connected" branch off nil.
+        // mysql2 reports nil there, and ActiveRecord keys its "not connected" branch off nil
         IRubyObject errno = code == 0 ? runtime.getNil() : runtime.newFixnum(code);
         IRubyObject sqlState = sqlStateStr == null ? runtime.getNil() : runtime.newString(sqlStateStr);
         IRubyObject msg = runtime.newString(message == null ? "" : message);
 
-        // A read_timeout (JDBC socketTimeout) throws a CommunicationsException wrapping a
+        // a read_timeout (JDBC socketTimeout) throws a CommunicationsException wrapping a
         // java.net.SocketTimeoutException. mysql2 surfaces this as Mysql2::Error::TimeoutError
         // (with nil errno), which ActiveRecord maps to AdapterTimeout; the generic 08-state
         // routing would otherwise mislabel it as a connection failure.
         if (timeout) {
             RubyClass timeoutClass = (RubyClass) errorClass(runtime).getConstant("TimeoutError");
             RubyException exc = (RubyException) timeoutClass.callMethod(context, "new",
-                    new IRubyObject[]{msg, runtime.getNil(), runtime.getNil(), sqlState});
+                    new IRubyObject[]{ msg, runtime.getNil(), runtime.getNil(), sqlState });
             return exc.toThrowable();
         }
 
@@ -784,7 +793,7 @@ public class Client extends RubyObject {
 
     private static boolean isSocketTimeout(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
-            if (c instanceof java.net.SocketTimeoutException) return true;
+            if (c instanceof SocketTimeoutException) return true;
             if (c == c.getCause()) break;
         }
         return false;
