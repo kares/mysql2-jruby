@@ -26,7 +26,7 @@ public class Result extends RubyObject {
     private IRubyObject[] cachedRows;
     private boolean closed;
 
-    private int rowCount;    // rows produced by the last non-cached iteration (#count)
+    private int rowCount; // rows produced by the last non-cached iteration
     private boolean iterated; // a non-cached result was iterated at least once (needs rewind to repeat)
 
     public Result(Ruby runtime, RubyClass klass, RowReader reader, boolean cacheRows, boolean fromStatement) {
@@ -87,15 +87,16 @@ public class Result extends RubyObject {
         if (iterated) reader.reset();
         iterated = true;
         rowCount = 0;
+
         ArrayList<IRubyObject> rows = block.isGiven() ? null : new ArrayList<>();
         IRubyObject row;
         while (!(row = reader.nextRow(runtime)).isNil()) {
             rowCount++;
             IRubyObject out = transform ? transformRow(context, row, asArray, symbolizeKeys) : row;
-            if (block.isGiven()) block.yield(context, out);
+            if (rows == null) block.yield(context, out);
             else rows.add(out);
         }
-        return block.isGiven() ? this : RubyArray.newArrayNoCopy(runtime, rows.toArray(new IRubyObject[0]));
+        return rows == null ? this : RubyArray.newArrayNoCopy(runtime, rows.toArray(IRubyObject.NULL_ARRAY));
     }
 
     /** Convert a buffered row to the per-call as: / symbolize_keys: format. */

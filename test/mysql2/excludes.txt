@@ -51,6 +51,12 @@ should accept connect flags and pass them to #connect
 should create a statement
 close should free server resources
 
+# --- client-side prepared statements interpolate a bound Time/DateTime as a quoted string
+#     literal, so `SELECT ? AS a` returns a VAR_STRING column (not a typed DATETIME the binary
+#     protocol would echo back). Not exercised by ActiveRecord, which reads real typed columns. ---
+should prepare Time values with microseconds
+should prepare DateTime values with microseconds
+
 # --- streaming (stream: true) — not implemented: results are always buffered client-side and
 #     re-iterable, so single-pass semantics (advancing #first, iterate-twice / query-again locks,
 #     mid-stream timeouts) don't apply ---
