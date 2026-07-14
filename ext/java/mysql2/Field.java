@@ -11,6 +11,7 @@ final class Field {
             TYPE_LONG_BLOB = 251, TYPE_BLOB = 252, TYPE_VAR_STRING = 253, TYPE_STRING = 254,
             TYPE_GEOMETRY = 255;
 
+    public static final int UNSIGNED_FLAG = 32;
     public static final int BINARY_FLAG = 128;
     public static final int ENUM_FLAG = 256;
     public static final int SET_FLAG = 2048;
@@ -26,10 +27,10 @@ final class Field {
     /**
      * MySQL type descriptor string for Mysql2::Result#field_types, e.g.
      * "int(11)", "varchar(13)", "decimal(10,3)", "text(1020)", "json".
-     * Mirrors mysql2's rb_mysql_result_fetch_field_type. NOTE: JDBC exposes the
-     * numeric precision (digit count), not MySQL's display width, so integer
-     * widths can differ from libmysql (e.g. int(10) vs int(11)); DECIMAL uses the
-     * driver's precision directly rather than the libmysql length arithmetic.
+     * Mirrors mysql2's rb_mysql_result_fetch_field_type. NOTE: Connector/J exposes
+     * the numeric precision (digit count), not MySQL's display width, so for a
+     * default-width signed integer the display width is restored (see intWidth);
+     * DECIMAL uses the driver's precision directly rather than libmysql arithmetic
      */
     public static String typeName(final int type,
                                   final long length,
@@ -39,12 +40,12 @@ final class Field {
         boolean binaryCharset = collationIndex == MYSQL2_BINARY_CHARSET;
         switch (type) {
             case TYPE_NULL:      return "null";
-            case TYPE_TINY:      return "tinyint(" + length + ")";
-            case TYPE_SHORT:     return "smallint(" + length + ")";
+            case TYPE_TINY:      return "tinyint(" + intWidth(length, flags, 3, 4) + ")";
+            case TYPE_SHORT:     return "smallint(" + intWidth(length, flags, 5, 6) + ")";
             case TYPE_YEAR:      return "year(" + length + ")";
-            case TYPE_INT24:     return "mediumint(" + length + ")";
-            case TYPE_LONG:      return "int(" + length + ")";
-            case TYPE_LONGLONG:  return "bigint(" + length + ")";
+            case TYPE_INT24:     return "mediumint(" + intWidth(length, flags, 7, 9) + ")";
+            case TYPE_LONG:      return "int(" + intWidth(length, flags, 10, 11) + ")";
+            case TYPE_LONGLONG:  return "bigint(" + intWidth(length, flags, 19, 20) + ")";
             case TYPE_FLOAT:     return "float(" + length + "," + decimals + ")";
             case TYPE_DOUBLE:    return "double(" + length + "," + decimals + ")";
             case TYPE_TIME:      return "time";
@@ -85,6 +86,18 @@ final class Field {
             case TYPE_JSON:        return "json";
             default:               return "unknown";
         }
+    }
+
+    /**
+     * Restore libmysql's integer display width.
+     * Connector/J reports the numeric precision (digit count of the signed range);
+     * for a default-width signed column that is one short of MySQL's display width
+     * (which reserves a slot for the sign; MEDIUMINT is two short)
+     */
+    private static long intWidth(final long length, final short flags,
+                                 final long signedPrecision, final long displayWidth) {
+        boolean unsigned = (flags & UNSIGNED_FLAG) != 0;
+        return (!unsigned && length == signedPrecision) ? displayWidth : length;
     }
 
     static String typeName(final com.mysql.cj.result.Field field) {
