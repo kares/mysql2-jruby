@@ -2,9 +2,10 @@ package mysql2;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
+import com.mysql.cj.result.Field;
 import org.jcodings.Encoding;
 import org.jcodings.specific.UTF8Encoding;
 import org.jruby.Ruby;
@@ -18,30 +19,24 @@ import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 
 /**
- * Per-result casting context: cached Ruby class handles and the query's
- * timezone/boolean options. Built once per Mysql2::Result so the hot
- * {@link Caster} path avoids repeated constant lookups.
+ * Per-result casting context: uilt once per Mysql2::Result so that {@link Caster}
+ * path avoids repeated constant lookups.
  */
-public final class CastCtx {
+final class CastCtx {
     final Ruby runtime;
     final ThreadContext context;
     final boolean castBooleans;
     final boolean dbTimezoneLocal;
     final Boolean appTimezoneLocal; // "local" | "utc" | null
 
-    final RubyClass errorClass;
-
     final Encoding defaultInternal; // Encoding.default_internal, or null
-    private final Map<String, Encoding> encCache = new HashMap<>();
 
-    public CastCtx(Ruby runtime, boolean castBooleans, String dbTimezone, String appTimezone,
-                   RubyClass errorClass) {
+    public CastCtx(Ruby runtime, boolean castBooleans, String dbTimezone, String appTimezone) {
         this.runtime = runtime;
         this.context = runtime.getCurrentContext();
         this.castBooleans = castBooleans;
         this.dbTimezoneLocal = (dbTimezone == null || dbTimezone.isEmpty()) ? true : dbTimezone.equals("local");
         this.appTimezoneLocal = appTimezone == null ? null : appTimezone.equals("local");
-        this.errorClass = errorClass;
 
         this.defaultInternal = runtime.getDefaultInternalEncoding();
 
@@ -143,22 +138,33 @@ public final class CastCtx {
         return localOffset;
     }
 
-    /** Ruby encoding for a string field, from the driver's charset name (cached). */
-    Encoding encodingFor(Field f) {
-        String name = f.encodingName;
-        if (name == null) return UTF8Encoding.INSTANCE;
-        Encoding enc = encCache.get(name);
-        if (enc == null) {
-            enc = resolveEncoding(name);
-            encCache.put(name, enc);
+    private transient RubyClass errorClass;
+
+    RubyClass getErrorClass() {
+        if (errorClass == null) {
+            this.errorClass = Client.errorClass(runtime);
         }
-        return enc;
+        return errorClass;
     }
 
-    private Encoding resolveEncoding(String name) {
+    static final Map<String, Encoding> encodingCache = new ConcurrentHashMap<>();
+
+    /** Ruby encoding for a string field, from the driver's charset name (cached). */
+    Encoding encodingFor(Field field) {
+        final String encodingName = field.getEncoding();
+        if (encodingName == null) return UTF8Encoding.INSTANCE;
+        Encoding encoding = encodingCache.get(encodingName);
+        if (encoding == null) {
+            encoding = resolveEncoding(runtime, encodingName);
+            encodingCache.put(encodingName, encoding);
+        }
+        return encoding;
+    }
+
+    private static Encoding resolveEncoding(Ruby runtime, String name) {
         try {
-            Encoding e = runtime.getEncodingService().getEncodingFromString(name);
-            if (e != null) return e;
+            Encoding encoding = runtime.getEncodingService().getEncodingFromString(name);
+            if (encoding != null) return encoding;
         } catch (RuntimeException ignore) {
             // fall through to UTF-8
         }

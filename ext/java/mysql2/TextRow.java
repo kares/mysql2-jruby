@@ -1,10 +1,8 @@
 package mysql2;
 
-import java.sql.Timestamp;
-
 /**
  * Column accessors the caster needs, over the current row of a {@link RowSource}
- * (Connector/J's protocol Resultset via {@link CjRowSource}, or a JDBC ResultSet
+ * (Connector/J's protocol Resultset via {@link CJRowSource}, or a JDBC ResultSet
  * via {@link JdbcRowSource}).
  *
  * getBytes(i) returns the raw wire bytes (text protocol: ASCII digits / charset
@@ -12,15 +10,10 @@ import java.sql.Timestamp;
  * driver's own decode+box work the byte path avoids (used by the benchmark).
  */
 public interface TextRow {
-    byte[] getBytes(int col);     // raw wire bytes, or null for SQL NULL (0-based)
+    byte[] getBytes(int col); // raw wire bytes, or null for SQL NULL (0-based)
+    //boolean wasNull();
 
-    boolean wasNull();            // whether the last typed getter read SQL NULL
-
-    long getLong(int col);        // driver-decoded + parsed + boxed as long
-
-    double getDouble(int col);
-
-    String getString(int col);    // driver charset-decodes to a Java String
-
-    Timestamp getTimestamp(int col);
+    //long getLong(int col); // driver-decoded + parsed + boxed as long
+    //double getDouble(int col);
+    //String getString(int col); // driver charset-decodes to a Java String
 }

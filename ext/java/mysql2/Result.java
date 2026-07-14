@@ -6,6 +6,7 @@ import org.jruby.Ruby;
 import org.jruby.RubyArray;
 import org.jruby.RubyClass;
 import org.jruby.RubyHash;
+import org.jruby.RubyInteger;
 import org.jruby.RubyObject;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.runtime.Block;
@@ -20,12 +21,13 @@ public class Result extends RubyObject {
         throw runtime.newTypeError("wrapping without a result set is not supported");
     };
 
-    private RowReader reader;
+    private final RowReader reader;
+    private final boolean fromStatement; // prepared-statement result (affects each without a block)
     private IRubyObject[] cachedRows;
     private boolean closed;
+
     private int streamedCount;         // rows yielded/drained so far (streaming)
     private boolean streamingComplete; // streaming result fully consumed
-    private final boolean fromStatement; // prepared-statement result (affects each without a block)
 
     public Result(Ruby runtime, RubyClass klass, RowReader reader, boolean cacheRows, boolean fromStatement) {
         super(runtime, klass);
@@ -36,7 +38,7 @@ public class Result extends RubyObject {
         // cache_rows (default): buffer all rows now and free the result set, like mysql2's store_result
         // this lets a prepared statement be re-executed without invalidating earlier results
         if (cacheRows) {
-            ArrayList<IRubyObject> rows = new ArrayList<>();
+            ArrayList<IRubyObject> rows = new ArrayList<>(reader.count);
             IRubyObject row;
             while (!(row = reader.nextRow(runtime)).isNil()) rows.add(row);
             this.cachedRows = rows.toArray(new IRubyObject[rows.size()]);
@@ -48,93 +50,98 @@ public class Result extends RubyObject {
     public IRubyObject each(ThreadContext context, IRubyObject[] args, Block block) {
         final Ruby runtime = context.runtime;
 
-        // Per-call as:/symbolize_keys: override the query-time row format.
-        boolean targetArray = reader.isAsArray();
-        boolean targetSym = reader.isSymbolizeKeys();
+        // per-call as: / symbolize_keys: override the query-time row format
+        boolean asArray = reader.asArray;
+        boolean symbolizeKeys = reader.symbolizeKeys;
         if (args.length > 0 && args[0] instanceof RubyHash) {
-            RubyHash o = (RubyHash) args[0];
-            IRubyObject as = o.op_aref(context, runtime.newSymbol("as"));
-            if (!as.isNil()) targetArray = as.equals(runtime.newSymbol("array"));
-            IRubyObject sk = o.op_aref(context, runtime.newSymbol("symbolize_keys"));
-            if (!sk.isNil()) targetSym = sk.isTrue();
+            final RubyHash hash = (RubyHash) args[0];
+            IRubyObject as = hash.op_aref(context, runtime.newSymbol("as"));
+            if (!as.isNil()) asArray = as.asJavaString().equals("array");
+            IRubyObject sym_keys = hash.op_aref(context, runtime.newSymbol("symbolize_keys"));
+            if (!sym_keys.isNil()) symbolizeKeys = sym_keys.isTrue();
         }
-        boolean transform = targetArray != reader.isAsArray() || targetSym != reader.isSymbolizeKeys();
+        boolean transform = asArray != reader.asArray || symbolizeKeys != reader.symbolizeKeys;
 
-        // Cached (cache_rows, default): rows were buffered at construction.
-        // A query result without a block returns the row array (mysql2 returns
-        // wrapper->rows), so `result.each` / `result.each(as: :array)` don't raise.
-        // A prepared-statement result instead yields unconditionally, so `each`
-        // with no block raises LocalJumpError on a non-empty result (statement_spec).
+        // cached (cache_rows, default): rows were buffered at construction
+        // a query result without a block returns the row array (mysql2 returns wrapper->rows),
+        // so `result.each` / `result.each(as: :array)` don't raise;
+        // a prepared-statement result instead yields unconditionally
         if (cachedRows != null) {
             if (!block.isGiven() && !fromStatement) {
-                IRubyObject[] out = new IRubyObject[cachedRows.length];
+                IRubyObject[] rows = new IRubyObject[cachedRows.length];
                 for (int i = 0; i < cachedRows.length; i++) {
-                    out[i] = transform ? transformRow(context, cachedRows[i], targetArray, targetSym) : cachedRows[i];
+                    rows[i] = transform ? transformRow(context, cachedRows[i], asArray, symbolizeKeys) : cachedRows[i];
                 }
-                return RubyArray.newArray(runtime, out);
+                return RubyArray.newArrayNoCopy(runtime, rows);
             }
+
             for (int i = 0; i < cachedRows.length; i++) {
-                block.yield(context, transform ? transformRow(context, cachedRows[i], targetArray, targetSym) : cachedRows[i]);
+                block.yield(context, transform ? transformRow(context, cachedRows[i], asArray, symbolizeKeys) : cachedRows[i]);
             }
             return this;
         }
 
-        // Streaming (cache_rows: false): drain lazily. Rows are always fetched
-        // (so #count tracks progress) but only yielded when a block is given.
-        // The result set is closed only on full exhaustion, so a partial consume
-        // (e.g. #first) can be resumed by a later #each.
+        // streaming (cache_rows: false): drain lazily - rows are always fetched (#count tracks progress)
+        // but only yielded when a block is given; the result set is closed only on full exhaustion, so a
+        // partial consume (e.g. #first) can be resumed by a later #each
         if (streamingComplete) {
-            throw streamingError(runtime, "You have already fetched all the rows for this query "
+            throw Client.error(context, "You have already fetched all the rows for this query "
                     + "and streaming is true. (to reiterate you must requery).");
         }
         IRubyObject row;
         while (!(row = reader.nextRow(runtime)).isNil()) {
             streamedCount++;
             if (block.isGiven()) {
-                block.yield(context, transform ? transformRow(context, row, targetArray, targetSym) : row);
+                block.yield(context, transform ? transformRow(context, row, asArray, symbolizeKeys) : row);
             }
         }
         streamingComplete = true;
         close();
+
         return runtime.newEmptyArray();
     }
 
-    /** Convert a buffered row to the per-call as:/symbolize_keys format. */
-    private IRubyObject transformRow(ThreadContext context, IRubyObject row, boolean targetArray, boolean targetSym) {
+    /** Convert a buffered row to the per-call as: / symbolize_keys: format. */
+    private IRubyObject transformRow(ThreadContext context,
+                                     final IRubyObject row,
+                                     final boolean asArray,
+                                     final boolean symbolizeKeys) {
         final Ruby runtime = context.runtime;
         if (row instanceof RubyArray) {
-            RubyArray<?> arr = (RubyArray<?>) row;
-            if (targetArray) return arr;
-            RubyHash h = RubyHash.newHash(runtime);
-            for (int i = 0; i < arr.size(); i++) h.fastASet(reader.key(runtime, i, targetSym), arr.eltInternal(i));
-            return h;
+            RubyArray<?> ary = (RubyArray<?>) row;
+            if (asArray) return ary;
+
+            RubyHash hash = RubyHash.newHash(runtime);
+            for (int i = 0; i < ary.size(); i++) hash.fastASet(reader.key(runtime, i, symbolizeKeys), ary.eltInternal(i));
+            return hash;
         }
-        RubyHash hash = (RubyHash) row;
-        if (targetArray) return hash.callMethod(context, "values");
-        RubyHash h = RubyHash.newHash(runtime);
-        RubyArray<?> hkeys = hash.keys();
+
+        RubyHash rowHash = (RubyHash) row;
+        if (asArray) return rowHash.values(context);
+
+        RubyHash hash = RubyHash.newHash(runtime);
+        RubyArray<?> hkeys = rowHash.keys();
         for (int i = 0; i < hkeys.size(); i++) {
-            h.fastASet(reader.key(runtime, i, targetSym), hash.op_aref(context, hkeys.eltInternal(i)));
+            hash.fastASet(reader.key(runtime, i, symbolizeKeys), rowHash.op_aref(context, hkeys.eltInternal(i)));
         }
-        return h;
+        return hash;
     }
 
     @JRubyMethod
     public RubyArray fields(ThreadContext context) {
-        return RubyArray.newArray(context.runtime, reader.fieldNames(context.runtime));
+        return RubyArray.newArrayNoCopy(context.runtime, reader.fieldNames(context.runtime));
     }
 
     @JRubyMethod(name = "field_types")
     public RubyArray field_types(ThreadContext context) {
-        return RubyArray.newArray(context.runtime, reader.fieldTypes(context.runtime));
+        return RubyArray.newArrayNoCopy(context.runtime, reader.fieldTypes(context.runtime));
     }
 
     @JRubyMethod(name = {"count", "size"})
-    public IRubyObject count(ThreadContext context) {
-        // Cached: total buffered rows. Streaming: rows drained so far (does not
-        // advance the stream), matching mysql2's running count.
-        int n = cachedRows != null ? cachedRows.length : streamedCount;
-        return context.runtime.newFixnum(n);
+    public RubyInteger count(ThreadContext context) {
+        // cached: total buffered rows
+        // streaming: rows drained so far (does not advance the stream)
+        return context.runtime.newFixnum(cachedRows != null ? cachedRows.length : streamedCount);
     }
 
     @JRubyMethod
@@ -149,7 +156,7 @@ public class Result extends RubyObject {
     }
 
     private RuntimeException streamingError(Ruby runtime, String message) {
-        RubyClass error = (RubyClass) runtime.getModule("Mysql2").getClass("Error");
+        RubyClass error = runtime.getModule("Mysql2").getClass("Error");
         return runtime.newRaiseException(error, message);
     }
 

@@ -2,6 +2,7 @@ package mysql2;
 
 import java.nio.charset.StandardCharsets;
 
+import org.jcodings.Encoding;
 import org.jcodings.specific.ASCIIEncoding;
 import org.jcodings.specific.UTF8Encoding;
 import org.jruby.Ruby;
@@ -10,6 +11,7 @@ import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
 import org.jruby.util.ConvertBytes;
 import org.jruby.util.ConvertDouble;
+import org.jruby.util.io.EncodingUtils;
 
 /**
  * Casts raw text-protocol wire bytes to Ruby objects, faithful to mysql2's
@@ -21,19 +23,19 @@ public final class Caster {
     private static final long MYSQL2_MIN_TIME = 2678400L;
     private static final long MYSQL2_MAX_TIME = 315578267999L;
 
-    public static IRubyObject byteCast(CastCtx ctx, TextRow row, int col, Field field) {
+    static IRubyObject byteCast(CastCtx ctx, TextRow row, int col, com.mysql.cj.result.Field field) {
         Ruby runtime = ctx.runtime;
         byte[] b = row.getBytes(col);
         if (b == null) return runtime.getNil();
 
-        switch (field.type) {
+        switch (field.getMysqlTypeId()) {
             case Field.TYPE_NULL:
                 return runtime.getNil();
             case Field.TYPE_BIT:
-                if (ctx.castBooleans && field.length == 1) return runtime.newBoolean(b.length > 0 && b[0] == 1);
+                if (ctx.castBooleans && field.getLength() == 1) return runtime.newBoolean(b.length > 0 && b[0] == 1);
                 return newBinaryString(runtime, b);
             case Field.TYPE_TINY:
-                if (ctx.castBooleans && field.length == 1) return runtime.newBoolean(b.length > 0 && b[0] != '0');
+                if (ctx.castBooleans && field.getLength() == 1) return runtime.newBoolean(b.length > 0 && b[0] != '0');
                 return parseInteger(runtime, b);
             case Field.TYPE_SHORT:
             case Field.TYPE_LONG:
@@ -43,7 +45,7 @@ public final class Caster {
                 return parseInteger(runtime, b);
             case Field.TYPE_DECIMAL:
             case Field.TYPE_NEWDECIMAL:
-                if (field.decimals == 0) return parseInteger(runtime, b);
+                if (field.getDecimals() == 0) return parseInteger(runtime, b);
                 if (parseDouble(b) == 0.0) return ctx.bigDecimalZero();
                 return ctx.bigDecimal(b);
             case Field.TYPE_FLOAT:
@@ -65,7 +67,7 @@ public final class Caster {
     }
 
     /** cast:false -- every non-NULL value as a String with the field's encoding. */
-    public static IRubyObject raw(CastCtx ctx, TextRow row, int col, Field field) {
+    public static IRubyObject raw(CastCtx ctx, TextRow row, int col, com.mysql.cj.result.Field field) {
         byte[] b = row.getBytes(col);
         if (b == null) return ctx.runtime.getNil();
         return castString(ctx, b, field);
@@ -76,13 +78,13 @@ public final class Caster {
      * then transcoded to Encoding.default_internal when set. Mirrors mysql2's
      * mysql2_set_field_string_encoding.
      */
-    private static IRubyObject castString(CastCtx ctx, byte[] b, Field field) {
-        Ruby runtime = ctx.runtime;
-        if (field.isBinary()) return newBinaryString(runtime, b);
-        org.jcodings.Encoding enc = ctx.encodingFor(field);
-        RubyString str = runtime.newString(new ByteList(b, enc, false));
-        if (ctx.defaultInternal != null && ctx.defaultInternal != enc) {
-            return org.jruby.util.io.EncodingUtils.strConvEnc(ctx.context, str, enc, ctx.defaultInternal);
+    private static IRubyObject castString(CastCtx ctx, byte[] bytes, com.mysql.cj.result.Field field) {
+        if (Field.isBinary(field)) return newBinaryString(ctx.runtime, bytes);
+
+        Encoding encoding = ctx.encodingFor(field);
+        RubyString str = ctx.runtime.newString(new ByteList(bytes, encoding, false));
+        if (ctx.defaultInternal != null && ctx.defaultInternal != encoding) {
+            return EncodingUtils.strConvEnc(ctx.context, str, encoding, ctx.defaultInternal);
         }
         return str;
     }
@@ -121,7 +123,7 @@ public final class Caster {
                 + (long) hour * 3600L + (long) min * 60L + sec;
         if (seconds == 0) return ctx.runtime.getNil();
         if (month < 1 || day < 1) {
-            throw ctx.runtime.newRaiseException(ctx.errorClass, "Invalid date: " + new String(b, StandardCharsets.US_ASCII));
+            throw ctx.runtime.newRaiseException(ctx.getErrorClass(), "Invalid date: " + new String(b, StandardCharsets.US_ASCII));
         }
         if (seconds < MYSQL2_MIN_TIME || seconds > MYSQL2_MAX_TIME) {
             return ctx.newDateTimeInAppZone(year, month, day, hour, min, sec);
@@ -139,7 +141,7 @@ public final class Caster {
         if (day < 0) return ctx.runtime.getNil();
         if (year + month + day == 0) return ctx.runtime.getNil();
         if (month < 1 || day < 1) {
-            throw ctx.runtime.newRaiseException(ctx.errorClass, "Invalid date: " + new String(b, StandardCharsets.US_ASCII));
+            throw ctx.runtime.newRaiseException(ctx.getErrorClass(), "Invalid date: " + new String(b, StandardCharsets.US_ASCII));
         }
         return ctx.newDate(year, month, day);
     }
@@ -198,6 +200,4 @@ public final class Caster {
         while (count++ < 6) v *= 10;
         return v;
     }
-
-    private Caster() {}
 }

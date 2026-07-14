@@ -1,11 +1,7 @@
 package mysql2;
 
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
-import java.sql.Types;
-
 /** MySQL wire field metadata subset needed for casting (mirrors MYSQL_FIELD). */
-public final class Field {
+final class Field {
     // enum_field_types
     public static final int TYPE_DECIMAL = 0, TYPE_TINY = 1, TYPE_SHORT = 2, TYPE_LONG = 3,
             TYPE_FLOAT = 4, TYPE_DOUBLE = 5, TYPE_NULL = 6, TYPE_TIMESTAMP = 7, TYPE_LONGLONG = 8,
@@ -22,30 +18,9 @@ public final class Field {
     // mysql2 hardcodes this; char/varchar lengths are byte lengths divided by it.
     private static final long MAX_BYTES_PER_CHAR = 3;
 
-    public final int type;
-    public final int decimals;
-    public final long length;
-    public final int flags;
-    public final int charsetnr;
-    public final String name;
-    public final String encodingName; // driver's Java charset name for this field (e.g. "UTF-8"), or null
-
-    public Field(int type, int decimals, long length, int flags, int charsetnr, String name) {
-        this(type, decimals, length, flags, charsetnr, name, null);
-    }
-
-    public Field(int type, int decimals, long length, int flags, int charsetnr, String name, String encodingName) {
-        this.type = type;
-        this.decimals = decimals;
-        this.length = length;
-        this.flags = flags;
-        this.charsetnr = charsetnr;
-        this.name = name;
-        this.encodingName = encodingName;
-    }
-
-    public boolean isBinary() {
-        return ((flags & BINARY_FLAG) != 0 && charsetnr == MYSQL2_BINARY_CHARSET) || charsetnr == 0;
+    public static boolean isBinary(com.mysql.cj.result.Field field) {
+        final int charsetnr = field.getCollationIndex();
+        return ((field.getFlags() & BINARY_FLAG) != 0 && charsetnr == MYSQL2_BINARY_CHARSET) || charsetnr == 0;
     }
 
     /**
@@ -56,8 +31,12 @@ public final class Field {
      * widths can differ from libmysql (e.g. int(10) vs int(11)); DECIMAL uses the
      * driver's precision directly rather than the libmysql length arithmetic.
      */
-    public String typeName() {
-        boolean binaryCharset = charsetnr == MYSQL2_BINARY_CHARSET;
+    public static String typeName(final int type,
+                                  final long length,
+                                  final int decimals,
+                                  final short flags,
+                                  final int collationIndex) {
+        boolean binaryCharset = collationIndex == MYSQL2_BINARY_CHARSET;
         switch (type) {
             case TYPE_NULL:      return "null";
             case TYPE_TINY:      return "tinyint(" + length + ")";
@@ -108,16 +87,22 @@ public final class Field {
         }
     }
 
+    static String typeName(final com.mysql.cj.result.Field field) {
+        return typeName(field.getMysqlTypeId(), field.getLength(), field.getDecimals(), field.getFlags(), field.getCollationIndex());
+    }
+
     /**
      * MySQL type id, declared length, flags and collation, equivalent to libmysqlclient's MYSQL_FIELD
      */
+    /*
     public static Field fromNative(com.mysql.cj.result.Field f) {
         // getMysqlTypeId() returns the true type regardless of tinyInt1isBit, and getLength() preserves e.g. TINYINT(1)
         return new Field(f.getMysqlTypeId(), f.getDecimals(), f.getLength(),
                 f.getFlags(), f.getCollationIndex(), f.getColumnLabel(), f.getEncoding());
-    }
+    } */
 
     /** Map a JDBC column to the MySQL field type the caster switches on. */
+    /*
     public static Field fromMeta(ResultSetMetaData md, int col) throws SQLException {
         int sqlType = md.getColumnType(col);
         int len = md.getColumnDisplaySize(col);
@@ -144,5 +129,5 @@ public final class Field {
             case Types.BLOB:     return new Field(TYPE_BLOB, 0, len, BINARY_FLAG, 63, name);
             default:             return new Field(TYPE_VAR_STRING, 0, len, 0, 33, name);
         }
-    }
+    } */
 }

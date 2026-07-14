@@ -2,8 +2,8 @@ package mysql2;
 
 import org.jruby.Ruby;
 import org.jruby.RubyArray;
-import org.jruby.RubyClass;
 import org.jruby.RubyHash;
+import org.jruby.RubyString;
 import org.jruby.runtime.builtin.IRubyObject;
 
 /**
@@ -14,11 +14,12 @@ import org.jruby.runtime.builtin.IRubyObject;
  */
 final class RowReader {
     private final RowSource source;
-    private final Field[] fields;
+    final int count;
+
+    final boolean asArray;
     private final IRubyObject[] keys; // hash keys (String or Symbol), null when asArray
-    private final int count;
-    private final boolean asArray;
-    private final boolean symbolizeKeys;
+    final boolean symbolizeKeys;
+
     private final boolean cast;
     private final CastCtx ctx;
 
@@ -29,20 +30,20 @@ final class RowReader {
                      boolean castBool,
                      boolean symbolizeKeys,
                      String dbTimezone,
-                     String appTimezone,
-                     RubyClass errorClass) {
+                     String appTimezone) {
         this.source = source;
         this.asArray = asArray;
         this.symbolizeKeys = symbolizeKeys;
         this.cast = cast;
-        this.ctx = new CastCtx(runtime, castBool, dbTimezone, appTimezone, errorClass);
+        this.ctx = new CastCtx(runtime, castBool, dbTimezone, appTimezone);
 
-        this.fields = source.fields();
-        this.count = fields.length;
-        this.keys = asArray ? null : new IRubyObject[count];
-        for (int i = 0; i < count; i++) {
-            if (keys != null) {
-                keys[i] = symbolizeKeys ? runtime.newSymbol(fields[i].name) : runtime.newString(fields[i].name);
+        this.count = source.size();
+        if (asArray) {
+            this.keys = null;
+        } else {
+            this.keys = new IRubyObject[count];
+            for (int i = 0; i < count; i++) {
+                keys[i] = key(runtime, i, symbolizeKeys);
             }
         }
     }
@@ -53,11 +54,11 @@ final class RowReader {
 
         IRubyObject[] vals = new IRubyObject[count];
         for (int i = 0; i < count; i++) {
-            vals[i] = cast ? Caster.byteCast(ctx, source, i, fields[i])
-                           : Caster.raw(ctx, source, i, fields[i]);
+            vals[i] = cast ? Caster.byteCast(ctx, source, i, source.getField(i))
+                           : Caster.raw(ctx, source, i, source.getField(i));
         }
 
-        if (asArray) return RubyArray.newArray(runtime, vals);
+        if (asArray) return RubyArray.newArrayNoCopy(runtime, vals);
 
         RubyHash hash = RubyHash.newHash(runtime);
         for (int i = 0; i < count; i++) hash.fastASet(keys[i], vals[i]);
@@ -72,7 +73,10 @@ final class RowReader {
     IRubyObject[] fieldNames(final Ruby runtime) {
         IRubyObject[] names = new IRubyObject[count];
         for (int i = 0; i < count; i++) {
-            names[i] = runtime.freezeAndDedupString(runtime.newString(fields[i].name));
+            // names[i] = runtime.freezeAndDedupString(runtime.newString(fields[i].name));
+            final RubyString fieldName = runtime.newString(source.fieldName(i));
+            fieldName.setFrozen(true);
+            names[i] = fieldName;
         }
         return names;
     }
@@ -80,24 +84,13 @@ final class RowReader {
     /** MySQL type descriptor strings (Mysql2::Result#field_types). */
     IRubyObject[] fieldTypes(final Ruby runtime) {
         IRubyObject[] types = new IRubyObject[count];
-        for (int i = 0; i < count; i++) types[i] = runtime.newString(fields[i].typeName());
+        for (int i = 0; i < count; i++) types[i] = runtime.newString(source.typeName(i));
         return types;
-    }
-
-    int fieldCount() {
-        return count;
-    }
-
-    boolean isAsArray() {
-        return asArray;
-    }
-
-    boolean isSymbolizeKeys() {
-        return symbolizeKeys;
     }
 
     /** Field name as a Symbol or String, for rebuilding rows under per-call options. */
     IRubyObject key(Ruby runtime, int i, boolean symbolize) {
-        return symbolize ? runtime.newSymbol(fields[i].name) : runtime.newString(fields[i].name);
+        final String fieldName = source.fieldName(i);
+        return symbolize ? runtime.newSymbol(fieldName) : runtime.newString(fieldName);
     }
 }

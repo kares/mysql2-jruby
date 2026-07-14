@@ -275,7 +275,7 @@ public class Client extends RubyObject {
             if (rs.hasRows()) {
                 this.affectedRows = 0;
                 this.lastId = 0;
-                return buildResult(context, new CjRowSource(rs), merged, false);
+                return buildResult(context, new CJRowSource(rs), merged, false);
             }
             this.affectedRows = Math.max(rs.getUpdateCount(), 0);
             this.lastId = Math.max(rs.getUpdateID(), 0);
@@ -339,8 +339,7 @@ public class Client extends RubyObject {
                 bool(hash(context, merged, "cast_booleans"), false),
                 bool(hash(context, merged, "symbolize_keys"), false),
                 orDefault(str(hash(context, merged, "database_timezone")), "local"),
-                str(hash(context, merged, "application_timezone")),
-                errorClass(runtime));
+                str(hash(context, merged, "application_timezone")));
         boolean cacheRows = bool(hash(context, merged, "cache_rows"), true);
         RubyClass resultClass = runtime.getModule("Mysql2").getClass("Result");
         return new Result(runtime, resultClass, reader, cacheRows, fromStatement);
@@ -748,11 +747,11 @@ public class Client extends RubyObject {
         return b == 0 || b == '\n' || b == '\r' || b == 0x1a || b == '\\' || b == '\'' || b == '"';
     }
 
-    RubyClass errorClass(Ruby runtime) {
+    static RubyClass errorClass(Ruby runtime) {
         return runtime.getModule("Mysql2").getClass("Error");
     }
 
-    RaiseException error(ThreadContext context, String msg) {
+    static RaiseException error(ThreadContext context, String msg) {
         return context.runtime.newRaiseException(errorClass(context.runtime), msg);
     }
 
