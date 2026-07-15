@@ -1,6 +1,7 @@
 package mysql2;
 
 import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -9,11 +10,15 @@ import java.sql.SQLWarning;
 import java.sql.Statement;
 import java.util.Iterator;
 import java.util.Properties;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import com.mysql.cj.Constants;
 import com.mysql.cj.NativeSession;
 import com.mysql.cj.exceptions.CJException;
 import com.mysql.cj.jdbc.ConnectionImpl;
 import com.mysql.cj.jdbc.JdbcStatement;
+import com.mysql.cj.jdbc.NonRegisteringDriver;
 import com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping;
 import com.mysql.cj.protocol.ProtocolEntityFactory;
 import com.mysql.cj.protocol.Resultset;
@@ -41,6 +46,7 @@ import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.Visibility;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
+import org.jruby.util.io.EncodingUtils;
 
 /** Mysql2::Client backed by a java.sql.Connection (Connector/J). */
 public class Client extends RubyObject {
@@ -50,9 +56,9 @@ public class Client extends RubyObject {
 
     private static java.sql.Driver newDriver() {
         try {
-            return new com.mysql.cj.jdbc.NonRegisteringDriver();
-        } catch (SQLException e) {
-            throw new IllegalStateException("could not create the Connector/J driver", e);
+            return new NonRegisteringDriver();
+        } catch (Exception e) {
+            throw new AssertionError("Could not create the Connector/J driver", e);
         }
     }
 
@@ -581,26 +587,25 @@ public class Client extends RubyObject {
         }
     }
 
-    /** mysql_get_server_version() equivalent: major*10000 + minor*100 + patch. */
+    /** mysql_get_server_version() equivalent: major*10000 + minor*100 + patch */
     private static long serverVersionId(String version) {
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)").matcher(version);
-        if (!m.find()) return 0;
-        return Long.parseLong(m.group(1)) * 10000 + Long.parseLong(m.group(2)) * 100 + Long.parseLong(m.group(3));
+        Matcher matcher = Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)").matcher(version);
+        if (!matcher.find()) return 0;
+        return Long.parseLong(matcher.group(1)) * 10000 + Long.parseLong(matcher.group(2)) * 100 + Long.parseLong(matcher.group(3));
     }
 
-    /** Build a String tagged with the connection encoding, exported to default_internal. */
-    private IRubyObject encodedString(ThreadContext context, String s) {
+    /** Build a String tagged with the connection encoding, exported to default_internal */
+    private RubyString encodedString(ThreadContext context, String s) {
         Ruby runtime = context.runtime;
-        RubyString str = runtime.newString(new ByteList(
-                s.getBytes(java.nio.charset.StandardCharsets.UTF_8), clientEncoding, false));
-        org.jcodings.Encoding di = runtime.getDefaultInternalEncoding();
-        if (di != null && di != clientEncoding) {
-            return org.jruby.util.io.EncodingUtils.strConvEnc(context, str, clientEncoding, di);
+        RubyString str = runtime.newString(new ByteList(s.getBytes(StandardCharsets.UTF_8), clientEncoding, false));
+        Encoding internalEnc = runtime.getDefaultInternalEncoding();
+        if (internalEnc != null && internalEnc != clientEncoding) {
+            return EncodingUtils.strConvEnc(context, str, clientEncoding, internalEnc);
         }
         return str;
     }
 
-    private static org.jcodings.Encoding resolveEncoding(Ruby runtime, String mysqlCharset) {
+    private static Encoding resolveEncoding(Ruby runtime, String mysqlCharset) {
         String name;
         switch (mysqlCharset.toLowerCase()) {
             case "utf8": case "utf8mb4": case "utf8mb3": name = "UTF-8"; break;
@@ -618,46 +623,34 @@ public class Client extends RubyObject {
         return org.jcodings.specific.UTF8Encoding.INSTANCE;
     }
 
-    // Client library info. The "client" here is the JDBC driver (Connector/J),
-    // so version data comes from its metadata; values are US-ASCII like mysql2's
-    // libmysql-derived strings.
     @JRubyMethod(name = "info")
     public IRubyObject info(ThreadContext context) {
-        try {
-            java.sql.DatabaseMetaData md = connection.getMetaData();
-            return infoHash(context.runtime, md.getDriverMajorVersion(),
-                    md.getDriverMinorVersion(), md.getDriverVersion());
-        } catch (SQLException e) {
-            throw errorFrom(context, e);
-        }
+        return info(context, null);
     }
 
     @JRubyMethod(meta = true, name = "info")
-    public static IRubyObject info_s(ThreadContext context, IRubyObject self) {
-        try {
-            java.sql.Driver d = new com.mysql.cj.jdbc.Driver();
-            String raw = com.mysql.cj.jdbc.Driver.class.getPackage().getImplementationVersion();
-            return infoHash(context.runtime, d.getMajorVersion(), d.getMinorVersion(), raw);
-        } catch (SQLException e) {
-            throw context.runtime.newRuntimeError(e.getMessage());
-        }
+    public static IRubyObject info(ThreadContext context, IRubyObject self) {
+        return infoHash(context.runtime, DRIVER.getMajorVersion(), DRIVER.getMinorVersion(), Constants.CJ_FULL_NAME);
     }
 
-    private static IRubyObject infoHash(Ruby runtime, int major, int minor, String raw) {
-        int patch = parsePatch(raw, major, minor);
+    private static RubyHash infoHash(Ruby runtime, int major, int minor, String name) {
+        int patch = parsePatch(name, major, minor);
         RubyHash hash = RubyHash.newHash(runtime);
         hash.fastASet(runtime.newSymbol("id"), runtime.newFixnum(major * 10000L + minor * 100L + patch));
         hash.fastASet(runtime.newSymbol("version"), usAscii(runtime, major + "." + minor + "." + patch));
-        hash.fastASet(runtime.newSymbol("header_version"), usAscii(runtime, raw == null ? "" : raw));
+        hash.fastASet(runtime.newSymbol("header_version"), usAscii(runtime, name == null ? "" : name));
         return hash;
     }
 
-    /** Extract the patch component from a driver version string like "9.4.0". */
+    /** Extract the patch component from a driver version string like "9.4.0" */
     private static int parsePatch(String raw, int major, int minor) {
         if (raw == null) return 0;
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("\\b" + major + "\\." + minor + "\\.(\\d+)").matcher(raw);
-        return m.find() ? Integer.parseInt(m.group(1)) : 0;
+        Matcher matcher = Pattern.compile("\\b" + major + "\\." + minor + "\\.(\\d+)").matcher(raw);
+        try {
+            return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private static RubyString usAscii(Ruby runtime, String s) {
@@ -878,7 +871,8 @@ public class Client extends RubyObject {
     }
 
     static String str(IRubyObject val) {
-        return (val == null || val.isNil()) ? null : val.asJavaString();
+        // a non-string option value (e.g. a numeric database name) should to_s
+        return (val == null || val.isNil()) ? null : ((RubyObject) val).toString();
     }
 
     /** Like {@link #str} but strict: a non-nil, non-String value raises TypeError
