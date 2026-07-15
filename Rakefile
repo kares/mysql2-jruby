@@ -6,29 +6,50 @@ JAR        = 'lib/mysql2.jar'
 
 # Connector/J is needed on the compile classpath (java.sql only at runtime is
 # not enough because Field.fromMeta etc. reference JDBC types via java.sql).
-CONNECTOR  = ENV['RUBY_MYSQL2_CONNECTOR_JAR'] || 'prototype/lib/mysql-connector-j.jar'
+CONNECTOR  = ENV['RUBY_MYSQL2_CONNECTOR_JAR'] || 'vendor/mysql-connector-j.jar'
+CONNECTOR_VERSION = ENV['CONNECTOR_VERSION'] || '9.4.0'
 
 CLEAN.include(CLASSES)
 CLOBBER.include(JAR)
 
 def jruby_jar
-  # jruby.jar from the running JRuby (works under `jruby -S rake`).
   File.join(RbConfig::CONFIG['libdir'], 'jruby.jar')
+end
+
+# The same JRuby that runs rake, with the connector jar on the JVM classpath
+def run_jruby(script, extra_classpath: nil)
+  cp = [ENV['CLASSPATH'], File.expand_path(CONNECTOR), extra_classpath].compact.join(File::PATH_SEPARATOR)
+  sh({ 'CLASSPATH' => cp }, RbConfig.ruby, *Array(script))
+end
+
+desc "Download MySQL Connector/J #{CONNECTOR_VERSION} from Maven Central to #{CONNECTOR}"
+task :connector do
+  require 'open-uri'
+  require 'digest'
+  base = "https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/#{CONNECTOR_VERSION}"
+  jar_url = "#{base}/mysql-connector-j-#{CONNECTOR_VERSION}.jar"
+
+  puts "Downloading #{jar_url}"
+  jar = URI.parse(jar_url).open('rb', &:read)
+  expected = URI.parse("#{jar_url}.sha1").open(&:read).strip[0, 40]
+  actual = Digest::SHA1.hexdigest(jar)
+  abort "SHA1 mismatch: expected #{expected}, got #{actual}" unless actual == expected
+
+  mkdir_p File.dirname(CONNECTOR)
+  File.binwrite(CONNECTOR, jar)
+  puts "Saved #{CONNECTOR} (#{jar.bytesize} bytes, sha1 #{actual})"
 end
 
 desc 'Compile the Java backend into lib/mysql2.jar'
 task :compile do
+  unless File.exist?(CONNECTOR)
+    abort "Connector/J not found at #{CONNECTOR}. Run `rake connector` to download it " \
+          "(or set RUBY_MYSQL2_CONNECTOR_JAR)."
+  end
   mkdir_p CLASSES
   cp = [jruby_jar, CONNECTOR].join(File::PATH_SEPARATOR)
   sh "javac -cp #{cp.inspect} -d #{CLASSES} #{JAVA_SRC.join(' ')}"
   sh "jar cf #{JAR} -C #{CLASSES} ."
-end
-
-# The same JRuby that runs rake (not a mise-default CRuby), with the connector
-# jar on the JVM classpath so lib/mysql2.rb can load the driver.
-def run_jruby(script, extra_classpath: nil)
-  cp = [ENV['CLASSPATH'], File.expand_path(CONNECTOR), extra_classpath].compact.join(File::PATH_SEPARATOR)
-  sh({ 'CLASSPATH' => cp }, RbConfig.ruby, *Array(script))
 end
 
 desc 'Run the mysql2 RSpec suite (spec/mysql2). Optional: rake spec[result]'
@@ -40,14 +61,30 @@ task :spec, [:file] => :compile do |_t, args|
   run_jruby(['-S', 'rspec', target])
 end
 
-desc 'Run the sanity scripts in test/ (needs MySQL on 127.0.0.1:13306, db bench)'
-task test: :compile do
-  Dir['test/*.rb'].sort.each { |f| run_jruby(f) }
+namespace :test do
+  desc 'Create the in-house test database'
+  task db: :compile do
+    run_jruby(['-Ilib', '-e', <<~RUBY])
+      require 'mysql2'
+      c = Mysql2::Client.new(host: ENV['MYSQL_HOST'] || '127.0.0.1', port: (ENV['MYSQL_PORT'] || 13306).to_i,
+                             username: ENV['MYSQL_USER'] || 'root', password: ENV['MYSQL_ROOT_PASSWORD'] || 'root')
+      db = ENV['MYSQL_DATABASE'] || 'test'
+      c.query("CREATE DATABASE IF NOT EXISTS \#{db} DEFAULT CHARACTER SET utf8mb4")
+      puts "built: " + c.query("SHOW DATABASES LIKE '\#{db}'").to_a.map(&:values).join
+    RUBY
+  end
 end
 
-desc 'Run the smoke test (needs a MySQL on 127.0.0.1:13306, db bench)'
-task smoke: :compile do
-  run_jruby('test/smoke.rb')
+desc 'Run the in-house minitest sanity checks (test/*.rb). TEST=file[,file] to limit.'
+task test: %w[compile test:db] do
+  files = ENV['TEST'] ? ENV['TEST'].split(',') : Dir['test/*_test.rb'].sort
+  loader = files.map { |f| "require #{File.expand_path(f).inspect}" }.join('; ')
+  run_jruby(['-e', loader])
+end
+
+desc 'Run the performance suite on this JRuby gem (compare with `ruby benchmark/run.rb` on MRI)'
+task bench: :compile do
+  run_jruby('benchmark/run.rb')
 end
 
 task default: :compile

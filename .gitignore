@@ -2,8 +2,8 @@
 .claude
 target/
 lib/mysql2.jar
-prototype/classes/
-prototype/lib/*.jar
+vendor/*.jar
+prototype/
 # copied upstream specs used for triage (contains local DB creds)
 spec/
 

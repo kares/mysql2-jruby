@@ -1,0 +1,43 @@
+
+Copyright (C) 2026 Karol Bucek
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation; version 2 of the License.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program (see the COPYING file); if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+
+================================================================================
+Note on MySQL Connector/J
+================================================================================
+
+At run time this gem links MySQL Connector/J (the `com.mysql:mysql-connector-j`
+JDBC driver) and calls its Java API directly, so a program combining the two is
+a combined work in the sense of the GNU GPL.
+
+Connector/J is distributed by Oracle under a dual license:
+
+  * the GNU General Public License, version 2 (GPLv2) *only*, together with the
+    "Universal FOSS Exception, version 1.0"; or
+  * a separate commercial license from Oracle.
+
+This gem is licensed under GPLv2 *only* — the same version Connector/J uses.
+
+Accordingly:
+
+  * This gem's own source (lib/, ext/) is licensed GPLv2-only; see COPYING
+  * Connector/J is NOT bundled or redistributed by this gem.  It is declared as
+    an external requirement and obtained separately (e.g. `rake connector`, or
+    from Maven Central / Oracle).  Connector/J remains under its own license
+    (GPLv2 + Universal FOSS Exception, or Oracle commercial); this project does
+    not, and cannot, relicense it
+
+Reproducing mysql2's Ruby API is an interface reimplementation and does not make
+this a derivative of the upstream mysql2 gem (MIT-licensed).
