@@ -57,6 +57,25 @@ close should free server resources
 should prepare Time values with microseconds
 should prepare DateTime values with microseconds
 
+# --- probe internal Ruby ivars (result's @query_options, client's @current_query_options)
+#     that mysql2's Ruby layer sets; our native Result/Client don't expose them ---
+should not retain query options set on a query for subsequent queries
+should allow changing query options for subsequent queries
+
+# --- #escape is pure string processing (no server round-trip), so it doesn't check the
+#     connection state the way libmysqlclient's mysql_real_escape_string does ---
+#escape should require an open connection
+
+# --- interrupting an in-flight query: JRuby can't preempt a blocking JDBC socket read, so a Ruby
+#     Timeout/Thread#raise only fires after the query completes -- the connection stays healthy
+#     rather than being torn down mid-read the way libmysqlclient's unblock function does. (Use
+#     :read_timeout, which maps to JDBC socketTimeout, to bound a query.) Also, Connector/J reports
+#     a killed connection as "Communications link failure" (08S01), not libmysql's "Lost connection",
+#     and the socket-state follow-ups need #socket, which JDBC doesn't expose. ---
+should detect closed connection on query read error
+should close the connection when an exception is raised
+should handle Timeouts without leaving the connection hanging if reconnect is set to true after construction
+
 # --- streaming (stream: true) — not implemented: results are always buffered client-side and
 #     re-iterable, so single-pass semantics (advancing #first, iterate-twice / query-again locks,
 #     mid-stream timeouts) don't apply ---
