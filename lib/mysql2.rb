@@ -5,16 +5,14 @@ require 'mysql2/version' unless defined? Mysql2::VERSION
 require 'mysql2/error'
 require 'mysql2/field'
 
-load File.expand_path('mysql2.jar', File.dirname(__FILE__))
-JRuby::Util.load_ext('mysql2.Mysql2Ext')
-
-# MySQL Connector/J is required for raw text-protocol getBytes() on all column types 
-# (MariaDB Connector/J refuses getBytes on numeric/temporal columns)
 connector_jar = ENV['RUBY_MYSQL2_CONNECTOR_JAR']
 require connector_jar if connector_jar
 
 begin
-  java.lang.Class.forName('com.mysql.cj.jdbc.Driver')
+  java.lang.Class.forName('com.mysql.cj.jdbc.NonRegisteringDriver')
 rescue java.lang.ClassNotFoundException
-  raise LoadError, "MySQL Connector/J not found on the classpath"
+  fail LoadError, "MySQL Connector/J not found on the classpath"
 end
+
+load File.expand_path('mysql2.jar', File.dirname(__FILE__))
+JRuby::Util.load_ext('mysql2.Mysql2Ext')
