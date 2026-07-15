@@ -93,7 +93,7 @@ final class CastCtx {
         RubyTime time = newTime(year, month, day, hour, minute, second, usec);
         if (appTimezoneLocal == null) return time;
         if (appTimezoneLocal) return time.localtime(context); // time.localtime
-        return time.gmtime(context); // time.utc
+        return time.gmtime(); // time.utc (gmtime(context) is JRuby 10+)
     }
 
     private transient RubyClass dateTimeClass;

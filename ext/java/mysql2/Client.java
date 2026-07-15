@@ -187,8 +187,9 @@ public class Client extends RubyObject {
         IRubyObject flags = opt(context, opts, "flags");
         if (flags == null || flags.isNil()) return false;
         if (flags instanceof RubyArray<?>) {
-            for (Iterator<IRubyObject> it = ((RubyArray<?>) flags).rubyStream().iterator(); it.hasNext(); ) {
-                IRubyObject e = it.next();
+            final RubyArray<?> flagsAry = (RubyArray<?>) flags;
+            for (int i = 0; i < flagsAry.size(); i++) {
+                final IRubyObject e = flagsAry.eltInternal(i);
                 if (e != null && !e.isNil() && "MULTI_STATEMENTS".equals(e.asJavaString())) return true;
             }
             return false;

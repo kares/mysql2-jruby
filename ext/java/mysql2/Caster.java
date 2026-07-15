@@ -156,7 +156,9 @@ public final class Caster {
 
     // strtod equivalent: byte[] -> double
     private static double parseDouble(byte[] bytes) {
-        return ConvertDouble.byteListToDouble(wrapBytes(bytes), false);
+        // JRuby 10.0+ only:
+        // return ConvertDouble.byteListToDouble(wrapBytes(bytes), false);
+        return new ConvertDouble.DoubleConverter().parse(wrapBytes(bytes), false, true);
     }
 
     private static ByteList wrapBytes(byte[] bytes) {
