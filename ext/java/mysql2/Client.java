@@ -170,7 +170,7 @@ public class Client extends RubyObject {
         }
 
         if (connMultiStatements) {
-            nativeSession(context).enableMultiQueries();
+            nativeSessionImpl(context, connection).enableMultiQueries();
         }
 
         // read_timeout: 0 -> a 1ms network timeout, applied now so the handshake and the
@@ -467,17 +467,22 @@ public class Client extends RubyObject {
         return context.nil;
     }
 
-    private NativeSession nativeSession(ThreadContext context) {
+    final NativeSession nativeSession(ThreadContext context) {
+        // a reconnect inside connection() resets nativeSession, so a stale
+        // session cached from a since-closed connection isn't handed back
+        Connection connection = connection(context);
         if (nativeSession == null) {
-            try {
-                nativeSession = connection(context).unwrap(ConnectionImpl.class).getSession();
-            } catch (SQLException ex) {
-                throw errorFrom(context, ex);
-            } catch (RuntimeException ex) {
-                throw (RaiseException) error(context, ex.getMessage()).initCause(ex);
-            }
+            return nativeSessionImpl(context, connection);
         }
         return nativeSession;
+    }
+
+    private NativeSession nativeSessionImpl(ThreadContext context, Connection connection) {
+        try {
+            return nativeSession = connection.unwrap(ConnectionImpl.class).getSession();
+        } catch (Exception ex) {
+            throw errorFrom(context, ex);
+        }
     }
 
     private ProtocolEntityFactory<Resultset, NativePacketPayload> resultSetFactory() {
@@ -809,7 +814,7 @@ public class Client extends RubyObject {
     RuntimeException errorFrom(ThreadContext context, Exception e) {
         if (e instanceof SQLException) return errorFrom(context, (SQLException) e);
         if (e instanceof CJException)  return errorFrom(context, (CJException) e);
-        return (RaiseException) buildError(context, 0, null, e.getMessage(), false).initCause(e);
+        return (RaiseException) error(context, e.getMessage()).initCause(e);
     }
 
     RuntimeException errorFrom(ThreadContext context, SQLException e) {
