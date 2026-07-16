@@ -1,0 +1,3 @@
+[submodule "mysql2"]
+	path = mysql2
+	url = https://github.com/brianmario/mysql2.git
