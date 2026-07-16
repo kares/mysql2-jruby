@@ -34,6 +34,8 @@ jobs:
       MYSQL_USER: root
       MYSQL_PASSWORD: root
       MYSQL_DATABASE: test
+      SPEC_OPTS: --force-color            # rspec (mysql2:spec): force color in non-TTY CI
+      TEST_OPTS: --verbose                # minitest (rake test): verbose (minitest 6 can't force color)
 
     steps:
       - uses: actions/checkout@v4

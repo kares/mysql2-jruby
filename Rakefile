@@ -77,7 +77,10 @@ desc 'Run the in-house minitest sanity checks (test/*.rb). TEST=file[,file] to l
 task test: %w[compile test:db] do
   files = ENV['TEST'] ? ENV['TEST'].split(',') : Dir['test/*_test.rb'].sort
   loader = files.map { |f| "require #{File.expand_path(f).inspect}" }.join('; ')
-  run_jruby(['-e', loader])
+  # opts after `--` land in ARGV (not parsed as ruby flags), which minitest reads
+  # (e.g. --verbose, --pride for color)
+  opts = (ENV['TEST_OPTS'] || ENV['TESTOPTS'] || '').split
+  run_jruby(['-e', loader, '--', *opts])
 end
 
 desc 'Run the performance suite on this JRuby gem (compare with `ruby benchmark/run.rb` on MRI)'
