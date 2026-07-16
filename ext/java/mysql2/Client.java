@@ -226,6 +226,9 @@ public class Client extends RubyObject {
 
     @JRubyMethod
     public IRubyObject close(ThreadContext context) {
+        // an explicit close disables reconnect (mysql2's nogvl_close), so a subsequent
+        // query raises "not connected" instead of silently re-establishing
+        this.connReconnect = false;
         try {
             if (connection != null && !connection.isClosed()) connection.close();
         } catch (Exception e) {

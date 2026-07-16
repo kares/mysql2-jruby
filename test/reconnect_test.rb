@@ -59,36 +59,31 @@ class ReconnectTest < Minitest::Test
     assert_equal false, client.ping
   end
 
-  # --- reconnect: true: a dead connection is transparently re-established -------
+  # --- reconnect: true: an explicit #close still disables reconnect ------------
+  # (mysql2's nogvl_close clears reconnect_enabled; reconnect revives a *dropped*
+  # connection, never a deliberately closed one)
 
-  def test_query_after_close_reconnects
-    client = new_client(reconnect: true)
-    first_id = client.thread_id
-    client.close
-    assert_equal true, client.closed?
-
-    row = client.query('SELECT 1 AS one').first
-    assert_equal 1, row['one']
-    assert_equal false, client.closed?
-    refute_equal first_id, client.thread_id, 'expected a new server connection after reconnect'
-  end
-
-  def test_server_info_after_close_reconnects
+  def test_query_after_close_raises_even_with_reconnect
     client = new_client(reconnect: true)
     client.close
-    info = client.server_info
-    assert_kind_of Integer, info[:id]
-    refute_empty info[:version]
+    err = assert_raises(Mysql2::Error) { client.query('SELECT 1') }
+    assert_includes err.message, 'MySQL client is not connected'
   end
 
-  def test_ping_after_close_reconnects
+  def test_server_info_after_close_raises_even_with_reconnect
     client = new_client(reconnect: true)
     client.close
-    assert_equal true, client.ping
-    assert_equal false, client.closed?
+    assert_raises(Mysql2::Error) { client.server_info }
   end
 
-  # closest to the real world: the server drops us, then the next ping reconnects
+  def test_ping_after_close_is_false_even_with_reconnect
+    client = new_client(reconnect: true)
+    client.close
+    assert_equal false, client.ping
+  end
+
+  # closest to the real world: the server *drops* us (not an explicit close), then
+  # the next ping transparently re-establishes the connection
   def test_ping_reconnects_after_server_kill
     client = new_client(reconnect: true)
     killed_id = client.thread_id
