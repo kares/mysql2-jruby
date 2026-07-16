@@ -8,7 +8,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
-import java.util.Iterator;
 import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -68,13 +67,12 @@ public class Client extends RubyObject {
     private long lastId;
     private String queryInfoString; // mysql_info() of the last query, or null
     private int warningCount; // server warnings from the last query
-    private int readTimeoutSeconds = -1; // configured :read_timeout
-    private Encoding clientEncoding = org.jcodings.specific.UTF8Encoding.INSTANCE;
+    private short readTimeoutSeconds = -1; // configured :read_timeout
+    private Encoding clientEncoding; // default: UTF8Encoding.INSTANCE;
 
-    // Connection parameters retained so #ping can re-establish the connection when
-    // reconnect: true (mysql2's mysql_ping auto-reconnect), re-running init_command etc.
-    private String jdbcUrl, connEncoding, connInitCommand;
+    private String jdbcUrl;
     private Properties jdbcProperties;
+    private String connEncoding, connInitCommand;
     private boolean connMultiStatements, connReconnect;
 
     private transient NativeSession nativeSession;
@@ -115,8 +113,8 @@ public class Client extends RubyObject {
         this.connReconnect = bool(opt(context, opts, "reconnect"), false);
 
         try {
-            establishConnection();
-        } catch (SQLException e) {
+            establishConnection(context);
+        } catch (SQLException|CJException e) {
             throw errorFrom(context, e);
         }
         return context.nil;
@@ -138,7 +136,7 @@ public class Client extends RubyObject {
         intOpt(context, opts, "write_timeout", true);
         Integer readTimeout = intOpt(context, opts, "read_timeout", true);
         if (readTimeout != null) {
-            this.readTimeoutSeconds = readTimeout;
+            this.readTimeoutSeconds = readTimeout.shortValue();
             // read_timeout > 0 maps to JDBC socketTimeout (seconds -> ms)
             // read_timeout == 0 is applied after connect; JDBC treats socketTimeout = 0  as "infinite",
             // the opposite of mysql2's "fail unless the response is ready ~immediately
@@ -151,33 +149,37 @@ public class Client extends RubyObject {
         return url;
     }
 
-    /** Open the JDBC connection and apply the mysql2-equivalent session setup.
+    /**
+     * Open the JDBC connection and apply the mysql2-equivalent session setup.
      * Reused by #ping when reconnect: true, so init_command etc. are re-sent on reconnect.
      */
-    private void establishConnection() throws SQLException {
+    private Connection establishConnection(ThreadContext context) throws SQLException {
         this.connection = DRIVER.connect(jdbcUrl, jdbcProperties);
         this.nativeSession = null; // re-resolve for the new physical connection
+
         // Make result strings come back in the client encoding (like mysql2's character_set_results),
         // so field metadata reports that charset and getBytes() yields bytes we can tag correctly
         try (Statement statement = connection.createStatement()) {
             statement.execute("SET character_set_results = " + sanitizeCharset(connEncoding));
         }
 
-        if (connMultiStatements) {
-            final NativeSession session = nativeSession();
-            if (session != null) session.enableMultiQueries();
-        }
         if (connInitCommand != null) {
             try (Statement statement = connection.createStatement()) {
                 statement.execute(connInitCommand);
             }
         }
+
+        if (connMultiStatements) {
+            nativeSession(context).enableMultiQueries();
+        }
+
         // read_timeout: 0 -> a 1ms network timeout, applied now so the handshake and the
         // setup queries above aren't aborted by it. Models mysql2's non-blocking poll
         // (read_timeout:0 fails a query whose response isn't essentially immediate).
         if (readTimeoutSeconds == 0) {
             connection.setNetworkTimeout(Runnable::run, 1);
         }
+        return connection;
     }
 
     /** :flags may be an Integer bitmask or an Array of flag names; detect MULTI_STATEMENTS. */
@@ -200,22 +202,7 @@ public class Client extends RubyObject {
         return false;
     }
 
-    /** mysql2 requires timeouts to be non-negative; raise Mysql2::Error otherwise. */
-    private static Integer requirePositive(ThreadContext context, Integer v, String name) {
-        if (v != null && v < 0) {
-            throw error(context, name + " must be a positive integer, got: " + v);
-        }
-        return v;
-    }
-
     /** Integer option (seconds/count), or null when absent or non-numeric. */
-    private static Integer intOpt(ThreadContext context, RubyHash opts, String name) {
-        IRubyObject v = opt(context, opts, name);
-        if (v == null || v.isNil()) return null;
-        if (v instanceof RubyInteger) return ((RubyInteger) v).getIntValue();
-        return v.convertToInteger().getIntValue();
-    }
-
     private static Integer intOpt(ThreadContext context, RubyHash opts, String name, boolean checkPositive) {
         IRubyObject v = opt(context, opts, name);
         if (v == null || v.isNil()) return null;
@@ -230,7 +217,7 @@ public class Client extends RubyObject {
     public IRubyObject close(ThreadContext context) {
         try {
             if (connection != null && !connection.isClosed()) connection.close();
-        } catch (SQLException e) {
+        } catch (Exception e) {
             throw errorFrom(context, e);
         }
         return context.nil;
@@ -240,7 +227,7 @@ public class Client extends RubyObject {
     public IRubyObject closed_p(ThreadContext context) {
         try {
             return context.runtime.newBoolean(connection == null || connection.isClosed());
-        } catch (SQLException e) {
+        } catch (Exception e) {
             return context.tru;
         }
     }
@@ -248,43 +235,59 @@ public class Client extends RubyObject {
     @JRubyMethod
     public IRubyObject ping(ThreadContext context) {
         try {
-            if (connection != null && !connection.isClosed() && connection.isValid(0)) return context.tru;
-        } catch (SQLException e) {
+            if (connection != null && connection.isValid(0)) return context.tru;
+        } catch (Exception e) {
             // fall through to reconnect handling
         }
-        // connection is down: mysql2's mysql_ping reconnects when reconnect: true, re-running
-        // init_command; Connector/J's own autoReconnect isn't reliable, so re-establish manually
+        // mysql2's mysql_ping reconnects when reconnect: true (re-running init_command)
+        // NOTE: Connector/J's autoReconnect isn't 100% reliable (native-session usage),
+        // so re-establish manually
         if (connReconnect) {
             try {
-                establishConnection();
+                establishConnection(context);
                 return context.tru;
-            } catch (SQLException e) {
+            } catch (Exception ex) {
                 return context.fals;
             }
         }
         return context.fals;
     }
 
+    /** The live JDBC connection, guarding operations like mysql2's REQUIRE_CONNECTED:
+     *  raises "MySQL client is not connected" once the connection is gone, unless
+     *  reconnect: true, in which case it re-establishes first (like libmysql auto-reconnect). */
+    private Connection connection(ThreadContext context) {
+        try {
+            if (connection != null && !connection.isClosed()) return connection;
+        } catch (SQLException e) {
+            // not really expected to happen (normal isClosed() is a flag check)
+        }
+        if (connReconnect) {
+            try {
+                return establishConnection(context);
+            } catch (Exception ex) {
+                throw errorFrom(context, ex);
+            }
+        }
+        throw error(context, "MySQL client is not connected");
+    }
+
     // mysql_thread_id: the server's id for this connection (used by KILL etc.).
     @JRubyMethod(name = "thread_id")
     public IRubyObject thread_id(ThreadContext context) {
-        final NativeSession session = nativeSession();
-        if (session != null) return context.runtime.newFixnum(session.getThreadId());
-        try (Statement s = connection.createStatement();
-             ResultSet rs = s.executeQuery("SELECT CONNECTION_ID()")) {
-            return context.runtime.newFixnum(rs.next() ? rs.getLong(1) : 0);
-        } catch (SQLException e) {
-            throw errorFrom(context, e);
+        final NativeSession session = nativeSession(context);
+        try {;
+             return context.runtime.newFixnum(session.getThreadId());
+        } catch (CJException ex) {
+            throw errorFrom(context, ex);
         }
     }
 
-    // mysql2's Client#encoding: the Ruby Encoding object for the connection charset.
+    // Client#encoding: the Ruby Encoding object for the connection charset
     @JRubyMethod
     public IRubyObject encoding(ThreadContext context) {
         return context.runtime.getEncodingService().getEncoding(clientEncoding);
     }
-
-    // --- query ---------------------------------------------------------------
 
     @JRubyMethod(required = 1, optional = 1)
     public IRubyObject query(ThreadContext context, IRubyObject[] args) {
@@ -292,9 +295,7 @@ public class Client extends RubyObject {
                 ? (RubyHash) queryOptions.callMethod(context, "merge", args[1])
                 : queryOptions;
 
-        final NativeSession session = nativeSession();
-        assert session != null;
-
+        final NativeSession session = nativeSession(context);
         // send the query as raw bytes (in the connection encoding) rather than a decoded Java
         // String, so bytes the server can't map -- e.g. invalid UTF-8 -- reach it intact and are
         // echoed/scrubbed the way libmysqlclient sees them
@@ -334,12 +335,12 @@ public class Client extends RubyObject {
         }
     }
 
-    /** Fallback for non-Connector/J drivers (no native session): the plain JDBC Statement path. */
+    /*
     private IRubyObject queryViaJdbc(ThreadContext context, IRubyObject sqlArg, RubyHash merged) {
         String sql = sqlArg.convertToString().asJavaString();
         Statement stmt = null;
         try {
-            stmt = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+            stmt = connection(context).createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
             boolean hasResult = stmt.execute(sql, Statement.RETURN_GENERATED_KEYS);
             this.queryInfoString = extractServerInfo(stmt);
             this.warningCount = countWarnings(stmt);
@@ -355,21 +356,22 @@ public class Client extends RubyObject {
             try { if (stmt != null) stmt.close(); } catch (SQLException ignore) { }
             throw errorFrom(context, e);
         }
-    }
+    } */
 
-    /** Query text as bytes in the connection encoding (mysql2's rb_str_export_to_enc). */
+    /** Query text as bytes in the connection encoding (mysql2's rb_str_export_to_enc) */
     private byte[] queryBytes(ThreadContext context, IRubyObject sqlArg) {
-        RubyString s = sqlArg.convertToString();
-        if (s.getEncoding() == clientEncoding) return s.getBytes();
-        IRubyObject conv = org.jruby.util.io.EncodingUtils.strConvEnc(context, s, s.getEncoding(), clientEncoding);
-        return ((RubyString) conv).getBytes();
+        RubyString str = sqlArg.convertToString();
+        if (str.getEncoding() == clientEncoding) return str.getBytes();
+
+        str = EncodingUtils.strConvEnc(context, str, str.getEncoding(), clientEncoding);
+        return str.getBytes();
     }
 
     @JRubyMethod(name = "prepare")
     public mysql2.Statement prepare(ThreadContext context, IRubyObject sql) {
         try {
             final String sqlString = sql.convertToString().asJavaString();
-            PreparedStatement ps = connection.prepareStatement(sqlString, Statement.RETURN_GENERATED_KEYS);
+            PreparedStatement ps = connection(context).prepareStatement(sqlString, Statement.RETURN_GENERATED_KEYS);
             RubyClass Statement = context.runtime.getModule("Mysql2").getClass("Statement");
             return new mysql2.Statement(context.runtime, Statement, this, ps);
         } catch (SQLException e) {
@@ -437,45 +439,42 @@ public class Client extends RubyObject {
         return context.runtime.newFixnum(warningCount);
     }
 
-    // mysql_set_server_option (COM_SET_OPTION). Rails brackets execute_batch with
-    // OPTION_MULTI_STATEMENTS_ON/OFF; Connector/J's NativeSession sends the identical
-    // wire message via enable/disableMultiQueries(). Returns true when the option is
-    // applied, false for anything we don't handle (matching mysql2's boolean result).
+    // mysql_set_server_option (COM_SET_OPTION)
+    // Rails brackets execute_batch with OPTION_MULTI_STATEMENTS_ON/OFF;
+    // Returns true when the option is applied, false for anything we don't handle
     @JRubyMethod(name = "set_server_option")
     public IRubyObject set_server_option(ThreadContext context, IRubyObject value) {
-        final NativeSession session = nativeSession();
-        if (session == null) return context.fals;
         final long opt = value.convertToInteger().getLongValue();
+        final NativeSession session = nativeSession(context);
         try {
-            if (opt == 0) {            // MYSQL_OPTION_MULTI_STATEMENTS_ON
+            if (opt == 0) {        // MYSQL_OPTION_MULTI_STATEMENTS_ON
                 session.enableMultiQueries();
-            } else if (opt == 1) {     // MYSQL_OPTION_MULTI_STATEMENTS_OFF
+            } else if (opt == 1) { // MYSQL_OPTION_MULTI_STATEMENTS_OFF
                 session.disableMultiQueries();
             } else {
                 return context.fals;
             }
             return context.tru;
         } catch (RuntimeException e) {
-            return context.fals;
+            return context.nil;
         }
     }
 
-    // No-op: #query already closes its statement, which drains any pending results of a
-    // multi-statement (batch) query, so nothing lingers on the connection. Present because
-    // ActiveRecord calls it unconditionally after every query.
+    // NOTE: #query already closes its statement, which drains any pending results of a
+    // multi-statement query; implemented as ActiveRecord calls this after every query
     @JRubyMethod(name = "abandon_results!")
     public IRubyObject abandon_results(ThreadContext context) {
         return context.nil;
     }
 
-    private NativeSession nativeSession() {
-        if (nativeSession == null && connection != null) {
+    private NativeSession nativeSession(ThreadContext context) {
+        if (nativeSession == null) {
             try {
-                nativeSession = connection.unwrap(ConnectionImpl.class).getSession();
+                nativeSession = connection(context).unwrap(ConnectionImpl.class).getSession();
             } catch (SQLException ex) {
-                throw errorFrom(getRuntime().getCurrentContext(), ex);
+                throw errorFrom(context, ex);
             } catch (RuntimeException ex) {
-                throw (RuntimeException) error(getRuntime().getCurrentContext(), ex.getMessage()).initCause(ex);
+                throw (RaiseException) error(context, ex.getMessage()).initCause(ex);
             }
         }
         return nativeSession;
@@ -565,7 +564,7 @@ public class Client extends RubyObject {
         try {
             // setDatabase() sends COM_INIT_DB directly, unlike setCatalog() whose meaning
             // depends on Connector/J's databaseTerm setting.
-            connection.unwrap(com.mysql.cj.jdbc.ConnectionImpl.class)
+            connection(context).unwrap(com.mysql.cj.jdbc.ConnectionImpl.class)
                     .setDatabase(db.convertToString().asJavaString());
         } catch (SQLException e) {
             throw errorFrom(context, e);
@@ -577,7 +576,7 @@ public class Client extends RubyObject {
     public IRubyObject server_info(ThreadContext context) {
         final Ruby runtime = context.runtime;
         try {
-            String version = connection.getMetaData().getDatabaseProductVersion();
+            String version = connection(context).getMetaData().getDatabaseProductVersion();
             RubyHash info = RubyHash.newHash(runtime);
             info.fastASet(runtime.newSymbol("id"), runtime.newFixnum(serverVersionId(version)));
             // tag with the connection encoding, exported to Encoding.default_internal
@@ -659,19 +658,24 @@ public class Client extends RubyObject {
                 org.jcodings.specific.USASCIIEncoding.INSTANCE, false));
     }
 
+    private static transient RubyHash defaultQueryOptions;
+
     @JRubyMethod(meta = true, name = "default_query_options")
     public static RubyHash defaultQueryOptions(ThreadContext context, IRubyObject self) {
-        final Ruby runtime = context.runtime;
-        RubyHash hash = RubyHash.newHash(runtime);
-        hash.fastASet(runtime.newSymbol("as"), runtime.newSymbol("hash"));
-        hash.fastASet(runtime.newSymbol("async"), runtime.getFalse());
-        hash.fastASet(runtime.newSymbol("cast_booleans"), runtime.getFalse());
-        hash.fastASet(runtime.newSymbol("symbolize_keys"), runtime.getFalse());
-        hash.fastASet(runtime.newSymbol("database_timezone"), runtime.newSymbol("local"));
-        hash.fastASet(runtime.newSymbol("application_timezone"), runtime.getNil());
-        hash.fastASet(runtime.newSymbol("cache_rows"), runtime.getTrue());
-        hash.fastASet(runtime.newSymbol("cast"), runtime.getTrue());
-        return hash;
+        if (defaultQueryOptions == null) {
+            final Ruby runtime = context.runtime;
+            RubyHash hash = RubyHash.newHash(runtime);
+            hash.fastASet(runtime.newSymbol("as"), runtime.newSymbol("hash"));
+            hash.fastASet(runtime.newSymbol("async"), runtime.getFalse());
+            hash.fastASet(runtime.newSymbol("cast_booleans"), runtime.getFalse());
+            hash.fastASet(runtime.newSymbol("symbolize_keys"), runtime.getFalse());
+            hash.fastASet(runtime.newSymbol("database_timezone"), runtime.newSymbol("local"));
+            hash.fastASet(runtime.newSymbol("application_timezone"), runtime.getNil());
+            hash.fastASet(runtime.newSymbol("cache_rows"), runtime.getTrue());
+            hash.fastASet(runtime.newSymbol("cast"), runtime.getTrue());
+            defaultQueryOptions = (RubyHash) hash.freeze(context);
+        }
+        return defaultQueryOptions;
     }
 
     /** Local timezone offset as a day fraction (Rational); matches mysql2 */
@@ -800,6 +804,12 @@ public class Client extends RubyObject {
 
     static RaiseException error(ThreadContext context, String msg) {
         return context.runtime.newRaiseException(errorClass(context.runtime), msg);
+    }
+
+    RuntimeException errorFrom(ThreadContext context, Exception e) {
+        if (e instanceof SQLException) return errorFrom(context, (SQLException) e);
+        if (e instanceof CJException)  return errorFrom(context, (CJException) e);
+        return (RaiseException) buildError(context, 0, null, e.getMessage(), false).initCause(e);
     }
 
     RuntimeException errorFrom(ThreadContext context, SQLException e) {

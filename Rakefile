@@ -4,8 +4,6 @@ JAVA_SRC   = FileList['ext/java/mysql2/*.java']
 CLASSES    = 'target/classes'
 JAR        = 'lib/mysql2.jar'
 
-# Connector/J is needed on the compile classpath (java.sql only at runtime is
-# not enough because Field.fromMeta etc. reference JDBC types via java.sql).
 CONNECTOR  = ENV['RUBY_MYSQL2_CONNECTOR_JAR'] || 'vendor/mysql-connector-j.jar'
 CONNECTOR_VERSION = ENV['CONNECTOR_VERSION'] || '9.4.0'
 
