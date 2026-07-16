@@ -333,7 +333,9 @@ public class Client extends RubyObject {
             this.warningCount = protocol.getWarningCount();
 
             if (result.hasRows()) {
-                this.affectedRows = 0;
+                // mysql_affected_rows() works like mysql_num_rows() for a buffered SELECT
+                // NOTE: RESULT_SET_SIZE_UNKNOWN = -1
+                this.affectedRows = Math.max(result.getRows().size(), 0);
                 this.lastId = 0;
                 return buildResult(context, new CJRowSource(result), merged, false);
             }
