@@ -90,3 +90,8 @@ concurrent use of #close
 prevent using a connection held by a dead thread
 describe the thread holding the active query
 should not allow another query to be sent without fetching a result first
+
+# --- the example's `output(/WARNING/).to_stderr` can't pass: the deprecated-option
+#     WARNING is intentionally not emitted (see checkAndCleanQueryOptions). The
+#     #inspect no-password-leak behavior it also checks is verified separately. ---
+should not include the password in the output of #inspect
