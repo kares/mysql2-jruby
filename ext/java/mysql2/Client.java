@@ -32,6 +32,7 @@ import org.jruby.Ruby;
 import org.jruby.RubyArray;
 import org.jruby.RubyClass;
 import org.jruby.RubyException;
+import org.jruby.RubyFixnum;
 import org.jruby.RubyHash;
 import org.jruby.RubyInteger;
 import org.jruby.RubyObject;
@@ -160,6 +161,12 @@ public class Client extends RubyObject {
         // reconnect after the server drops the connection; #ping reconnects manually instead
         if (bool(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
 
+        // CLIENT_FOUND_ROWS: report rows *matched* by an UPDATE rather than rows *changed*
+        // (ActiveRecord relies on this); Connector/J's default (useAffectedRows=false) already
+        // means matched rows -- like the flag being set -- so only when :flags omits FOUND_ROWS
+        // (mysql2's default) do we flip to changed rows, matching libmysql without the flag...
+        if (!hasFlag(context, opts, "FOUND_ROWS", FOUND_ROWS)) url.append("&useAffectedRows=true");
+
         return url;
     }
 
@@ -196,24 +203,23 @@ public class Client extends RubyObject {
         return connection;
     }
 
-    /** :flags may be an Integer bitmask or an Array of flag names; detect MULTI_STATEMENTS. */
     private static boolean isMultiStatements(ThreadContext context, RubyHash opts) {
-        final long MULTI_STATEMENTS = 65536;
+        return hasFlag(context, opts, "MULTI_STATEMENTS", MULTI_STATEMENTS);
+    }
 
+    /** Whether :flags requests a capability, given as an Integer bitmask or an Array of flag names */
+    private static boolean hasFlag(ThreadContext context, RubyHash opts, String name, long bit) {
         IRubyObject flags = opt(context, opts, "flags");
         if (flags == null || flags.isNil()) return false;
         if (flags instanceof RubyArray<?>) {
             final RubyArray<?> flagsAry = (RubyArray<?>) flags;
             for (int i = 0; i < flagsAry.size(); i++) {
                 final IRubyObject e = flagsAry.eltInternal(i);
-                if (e != null && !e.isNil() && "MULTI_STATEMENTS".equals(e.asJavaString())) return true;
+                if (e != null && !e.isNil() && name.equals(e.asJavaString())) return true;
             }
             return false;
         }
-        if (flags instanceof RubyInteger) {
-            return (((RubyInteger) flags).getLongValue() & MULTI_STATEMENTS) != 0;
-        }
-        return false;
+        return flags instanceof RubyFixnum && (((RubyFixnum) flags).getLongValue() & bit) != 0;
     }
 
     /** Integer option (seconds/count), or null when absent or non-numeric. */
@@ -726,22 +732,25 @@ public class Client extends RubyObject {
         return RubyRational.newRationalCanonicalize(context, offset, 86400);
     }
 
+    // CLIENT_* capability flags (mysql_com.h)
+    static final long LONG_PASSWORD = 1, FOUND_ROWS = 2, LONG_FLAG = 4, CONNECT_WITH_DB = 8,
+            NO_SCHEMA = 16, COMPRESS = 32, ODBC = 64, LOCAL_FILES = 128, IGNORE_SPACE = 256,
+            PROTOCOL_41 = 512, INTERACTIVE = 1024, SSL = 2048, IGNORE_SIGPIPE = 4096,
+            TRANSACTIONS = 8192, RESERVED = 16384, SECURE_CONNECTION = 32768,
+            MULTI_STATEMENTS = 65536, MULTI_RESULTS = 131072, PS_MULTI_RESULTS = 262144,
+            PLUGIN_AUTH = 524288, CONNECT_ATTRS = 1048576, SESSION_TRACK = 1L << 23,
+            SSL_VERIFY_SERVER_CERT = 1L << 30, REMEMBER_OPTIONS = 1L << 31;
+    static final long ALL_FLAGS = LONG_PASSWORD | FOUND_ROWS | LONG_FLAG | CONNECT_WITH_DB
+            | NO_SCHEMA | COMPRESS | ODBC | LOCAL_FILES | IGNORE_SPACE |
+            PROTOCOL_41 | INTERACTIVE | SSL | IGNORE_SIGPIPE |
+            TRANSACTIONS | RESERVED | SECURE_CONNECTION |
+            MULTI_STATEMENTS | MULTI_RESULTS | PS_MULTI_RESULTS |
+            PLUGIN_AUTH | CONNECT_ATTRS | SESSION_TRACK |
+            SSL_VERIFY_SERVER_CERT | REMEMBER_OPTIONS;
+    static final long BASIC_FLAGS = ALL_FLAGS & ~(SSL | COMPRESS | SSL_VERIFY_SERVER_CERT);
+
     /** Define Mysql2::Client connection-flag / SSL / session-track constants */
     static void defineConstants(Ruby runtime, RubyClass klass) {
-        // CLIENT_* capability flags (mysql_com.h)
-        long LONG_PASSWORD = 1, FOUND_ROWS = 2, LONG_FLAG = 4, CONNECT_WITH_DB = 8,
-             NO_SCHEMA = 16, COMPRESS = 32, ODBC = 64, LOCAL_FILES = 128, IGNORE_SPACE = 256,
-             PROTOCOL_41 = 512, INTERACTIVE = 1024, SSL = 2048, IGNORE_SIGPIPE = 4096,
-             TRANSACTIONS = 8192, RESERVED = 16384, SECURE_CONNECTION = 32768,
-             MULTI_STATEMENTS = 65536, MULTI_RESULTS = 131072, PS_MULTI_RESULTS = 262144,
-             PLUGIN_AUTH = 524288, CONNECT_ATTRS = 1048576, SESSION_TRACK = 1L << 23,
-             SSL_VERIFY_SERVER_CERT = 1L << 30, REMEMBER_OPTIONS = 1L << 31;
-        long ALL_FLAGS = LONG_PASSWORD | FOUND_ROWS | LONG_FLAG | CONNECT_WITH_DB | NO_SCHEMA
-             | COMPRESS | ODBC | LOCAL_FILES | IGNORE_SPACE | PROTOCOL_41 | INTERACTIVE | SSL
-             | IGNORE_SIGPIPE | TRANSACTIONS | RESERVED | SECURE_CONNECTION | MULTI_STATEMENTS
-             | MULTI_RESULTS | PS_MULTI_RESULTS | PLUGIN_AUTH | CONNECT_ATTRS | SESSION_TRACK
-             | SSL_VERIFY_SERVER_CERT | REMEMBER_OPTIONS;
-        long BASIC_FLAGS = ALL_FLAGS & ~(SSL | COMPRESS | SSL_VERIFY_SERVER_CERT);
 
         constant(runtime, klass, "LONG_PASSWORD", LONG_PASSWORD);
         constant(runtime, klass, "FOUND_ROWS", FOUND_ROWS);

@@ -5,10 +5,15 @@ require 'minitest/autorun'
 require 'mysql2'
 
 class SmokeTest < Minitest::Test
+
+  CLIENT_OPTS = {
+    host: ENV['MYSQL_HOST'] || '127.0.0.1', port: (ENV['MYSQL_PORT'] || 13306).to_i,
+    username: ENV['MYSQL_USER'] || 'root', password: ENV['MYSQL_PASSWORD'] || 'root',
+    database: ENV['MYSQL_DATABASE'] || 'test'
+  }.freeze
+
   def setup
-    @client = Mysql2::Client.new(host: ENV['MYSQL_HOST'] || '127.0.0.1', port: (ENV['MYSQL_PORT'] || 13306).to_i,
-                                 username: ENV['MYSQL_USER'] || 'root', password: ENV['MYSQL_PASSWORD'] || 'root',
-                                 database: ENV['MYSQL_DATABASE'] || 'test')
+    @client = Mysql2::Client.new(**CLIENT_OPTS)
   end
 
   def teardown
@@ -30,14 +35,35 @@ class SmokeTest < Minitest::Test
     assert_equal true, @client.ping
   end
 
+  # Without FOUND_ROWS (mysql2's default) affected_rows counts rows *changed*,
+  # so a no-op UPDATE reports 0
+  def test_affected_rows_defaults_to_changed_rows
+    @client.query 'CREATE TEMPORARY TABLE found_rows_test (id INT PRIMARY KEY, v INT)'
+    @client.query 'INSERT INTO found_rows_test VALUES (1, 100), (2, 100)'
+    @client.query 'UPDATE found_rows_test SET v = 100 WHERE v = 100' # matches 2, changes 0
+    assert_equal 0, @client.affected_rows
+  end
+
+  # flags: FOUND_ROWS makes affected_rows count rows *matched* - same no-op UPDATE reports 2
+  def test_affected_rows_with_found_rows_flag_counts_matched_rows
+    client = Mysql2::Client.new(CLIENT_OPTS.merge(flags: Mysql2::Client::FOUND_ROWS))
+    client.query 'CREATE TEMPORARY TABLE found_rows_flag_test (id INT PRIMARY KEY, v INT)'
+    client.query 'INSERT INTO found_rows_flag_test VALUES (1, 100), (2, 100)'
+    client.query 'UPDATE found_rows_flag_test SET v = 100 WHERE v = 100' # matches 2, changes 0
+    assert_equal 2, client.affected_rows
+  ensure
+    client&.close
+  end
+
   # :url overrides the host/port/database-built JDBC URL (activerecord-jdbc-adapter style)
   def test_connect_via_url_override
-    host = ENV['MYSQL_HOST'] || '127.0.0.1'
-    port = (ENV['MYSQL_PORT'] || 13306).to_i
-    db   = ENV['MYSQL_DATABASE'] || 'test'
+    host = CLIENT_OPTS.fetch(:host)
+    port = CLIENT_OPTS.fetch(:port)
+    db   = CLIENT_OPTS.fetch(:database)
     url  = "jdbc:mysql://#{host}:#{port}/#{db}?useSSL=false&allowPublicKeyRetrieval=true"
-    client = Mysql2::Client.new(username: ENV['MYSQL_USER'] || 'root',
-                                password: ENV['MYSQL_PASSWORD'] || 'root', url: url)
+    client = Mysql2::Client.new(username: CLIENT_OPTS.fetch(:username),
+                                password: CLIENT_OPTS.fetch(:password),
+                                url: url)
     assert_equal 1, client.query('SELECT 1 AS one').first['one']
   ensure
     client&.close
