@@ -109,7 +109,8 @@ public class Client extends RubyObject {
         // verbatim, overriding host/port/database and the params otherwise folded into the URL
         final String url = str(opt(context, opts, "url"));
         this.jdbcUrl = url != null ? url : buildJdbcUrl(context, opts).toString();
-        this.jdbcProperties = new Properties();
+        this.jdbcProperties = buildJdbcProperties(context, opts);
+        // credentials are layered on last so they win over :properties
         if (user != null) jdbcProperties.setProperty("user", user);
         if (pass != null) jdbcProperties.setProperty("password", pass);
 
@@ -142,7 +143,8 @@ public class Client extends RubyObject {
         String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
 
         // NOTE: SSL is deliberately left off for now (useSSL=false)
-        StringBuilder url = new StringBuilder("jdbc:mysql://").append(host).append(':').append(port)
+        final StringBuilder url = new StringBuilder("jdbc:mysql://")
+                .append(host).append(':').append(port)
                 .append('/').append(database)
                 .append("?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8");
         // mysql2 rejects negative timeouts (write_timeout has no JDBC analog, but is still validated)
@@ -159,7 +161,9 @@ public class Client extends RubyObject {
         }
         // NOTE: JDBC autoReconnect is deliberately not used; it's deprecated and fails to
         // reconnect after the server drops the connection; #ping reconnects manually instead
-        if (bool(opt(context, opts, "local_infile"), false)) url.append("&allowLoadLocalInfile=true");
+        if (bool(opt(context, opts, "local_infile"), false)) {
+            url.append("&allowLoadLocalInfile=true");
+        }
 
         // CLIENT_FOUND_ROWS: report rows *matched* by an UPDATE rather than rows *changed*
         // (ActiveRecord relies on this); Connector/J's default (useAffectedRows=false) already
@@ -168,6 +172,28 @@ public class Client extends RubyObject {
         if (!hasFlag(context, opts, "FOUND_ROWS", FOUND_ROWS)) url.append("&useAffectedRows=true");
 
         return url;
+    }
+
+    private Properties buildJdbcProperties(ThreadContext context, RubyHash opts) {
+        final Properties jdbcProperties = new Properties();
+
+        IRubyObject propertiesOpt = opt(context, opts, "properties");
+        if (propertiesOpt instanceof RubyHash) {
+            final RubyHash properties = (RubyHash) propertiesOpt;
+            final RubyArray propertiesKeys = properties.keys();
+            for (int i = 0; i < propertiesKeys.size(); i++) {
+                final IRubyObject key = propertiesKeys.eltInternal(i);
+                final IRubyObject val = properties.fastARef(key);
+                if (val != null && !val.isNil()) {
+                    jdbcProperties.put(key.toString(), val.asJavaString());
+                }
+            }
+        }
+
+        String collation = str(opt(context, opts, "collation"));
+        if (collation != null) jdbcProperties.setProperty("connectionCollation", collation);
+
+        return jdbcProperties;
     }
 
     /**

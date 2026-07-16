@@ -69,6 +69,23 @@ class SmokeTest < Minitest::Test
     client&.close
   end
 
+  # activerecord-jdbc-adapter parity: :properties passes arbitrary Connector/J driver
+  # properties through verbatim (here sessionVariables runs SET SESSION on connect)
+  def test_jdbc_properties_passthrough
+    client = Mysql2::Client.new(CLIENT_OPTS.merge(properties: { sessionVariables: 'wait_timeout=1234' }))
+    assert_equal 1234, client.query('SELECT @@wait_timeout AS t').first['t']
+  ensure
+    client&.close
+  end
+
+  # activerecord-jdbc-adapter parity: :collation maps to the connectionCollation property
+  def test_collation_option
+    client = Mysql2::Client.new(CLIENT_OPTS.merge(collation: 'utf8mb4_unicode_ci'))
+    assert_equal 'utf8mb4_unicode_ci', client.query('SELECT @@collation_connection AS c').first['c']
+  ensure
+    client&.close
+  end
+
   def test_fields_and_aggregate
     res = @client.query("SELECT COUNT(*) AS n, AVG(x) AS avg_x FROM (SELECT 1 AS x UNION SELECT 3) t")
     assert_equal %w[n avg_x], res.fields
