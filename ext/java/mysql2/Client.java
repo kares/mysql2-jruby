@@ -3,6 +3,7 @@ package mysql2;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.Driver;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -47,13 +48,12 @@ import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
 import org.jruby.util.io.EncodingUtils;
 
-/** Mysql2::Client backed by a java.sql.Connection (Connector/J). */
 public class Client extends RubyObject {
     public static final ObjectAllocator ALLOCATOR = Client::new;
 
-    private static final java.sql.Driver DRIVER = newDriver();
+    private static final Driver DRIVER = createMySQLDriver();
 
-    private static java.sql.Driver newDriver() {
+    static Driver createMySQLDriver() {
         try {
             return new NonRegisteringDriver();
         } catch (Exception e) {
@@ -99,6 +99,8 @@ public class Client extends RubyObject {
         String user = str(opt(context, opts, "username", "user"));
         String pass = str(opt(context, opts, "password", "pass"));
 
+        checkAndCleanQueryOptions(context);
+
         String encoding = orDefault(strType(context, opt(context, opts, "encoding")), "utf8mb4");
         this.clientEncoding = resolveEncoding(runtime, encoding);
 
@@ -112,12 +114,21 @@ public class Client extends RubyObject {
         this.connMultiStatements = isMultiStatements(context, opts);
         this.connReconnect = bool(opt(context, opts, "reconnect"), false);
 
+        callMethod(context, "connect");
+        return context.nil;
+    }
+
+    // mysql2 performs the actual connection in a separate, overridable #connect
+    // NOTE: redundant except for mysql2's suite stubs it to avoid connecting...
+    @JRubyMethod(name = "connect", visibility = Visibility.PRIVATE, rest = true)
+    public IRubyObject connect(ThreadContext context, IRubyObject[] args) {
+        this.connection = null;
         try {
             establishConnection(context);
-        } catch (SQLException|CJException e) {
+        } catch (Exception e) {
             throw errorFrom(context, e);
         }
-        return context.nil;
+        return this;
     }
 
     private StringBuilder buildJdbcUrl(ThreadContext context, RubyHash opts) {
@@ -913,5 +924,28 @@ public class Client extends RubyObject {
     private static String sanitizeCharset(String name) {
         if (name == null || !name.matches("[A-Za-z0-9_]+")) return "utf8mb4";
         return name;
+    }
+
+    // mysql2's check_and_clean_query_options: warn on deprecated option keys and
+    // drops credentials so #inspect / #query_options can't leak them
+    private void checkAndCleanQueryOptions(ThreadContext context) {
+        final Ruby runtime = context.runtime;
+        /*
+        for (String key : new String[] { "user", "pass", "hostname", "dbname", "db", "sock" }) {
+            if (queryOptions.fastARef(runtime.newSymbol(key)) != null) {
+                warn(context, "============= WARNING FROM mysql2 =============");
+                warn(context, "The options :user, :pass, :hostname, :dbname, :db, and :sock are deprecated and will be removed at some point in the future.");
+                warn(context, "Instead, please use :username, :password, :host, :port, :database, :socket, :flags for the options.");
+                warn(context, "============= END WARNING FROM mysql2 =========");
+                break;
+            }
+        } */
+        queryOptions.delete(context, runtime.newSymbol("password"));
+        queryOptions.delete(context, runtime.newSymbol("pass"));
+    }
+
+    private static void warn(ThreadContext context, String message) {
+        IRubyObject stderr = context.runtime.getGlobalVariables().get("$stderr");
+        stderr.callMethod(context, "puts", context.runtime.newString(message));
     }
 }
