@@ -7,7 +7,7 @@ require 'mysql2'
 class SmokeTest < Minitest::Test
   def setup
     @client = Mysql2::Client.new(host: ENV['MYSQL_HOST'] || '127.0.0.1', port: (ENV['MYSQL_PORT'] || 13306).to_i,
-                                 username: ENV['MYSQL_USER'] || 'root', password: ENV['MYSQL_ROOT_PASSWORD'] || 'root',
+                                 username: ENV['MYSQL_USER'] || 'root', password: ENV['MYSQL_PASSWORD'] || 'root',
                                  database: ENV['MYSQL_DATABASE'] || 'test')
   end
 

@@ -65,7 +65,7 @@ namespace :test do
     run_jruby(['-Ilib', '-e', <<~RUBY])
       require 'mysql2'
       c = Mysql2::Client.new(host: ENV['MYSQL_HOST'] || '127.0.0.1', port: (ENV['MYSQL_PORT'] || 13306).to_i,
-                             username: ENV['MYSQL_USER'] || 'root', password: ENV['MYSQL_ROOT_PASSWORD'] || 'root')
+                             username: ENV['MYSQL_USER'] || 'root', password: ENV['MYSQL_PASSWORD'] || 'root')
       db = ENV['MYSQL_DATABASE'] || 'test'
       c.query("CREATE DATABASE IF NOT EXISTS \#{db} DEFAULT CHARACTER SET utf8mb4")
       puts "built: " + c.query("SHOW DATABASES LIKE '\#{db}'").to_a.map(&:values).join
@@ -110,7 +110,7 @@ namespace :mysql2 do
     run_jruby(['-Ilib', '-e', <<~RUBY])
       require 'mysql2'
       c = Mysql2::Client.new(host: ENV['MYSQL_HOST'] || '127.0.0.1', port: (ENV['MYSQL_PORT'] || 13306).to_i,
-                             username: 'root', password: ENV['MYSQL_ROOT_PASSWORD'] || 'root')
+                             username: 'root', password: ENV['MYSQL_PASSWORD'] || 'root')
       db = ENV['MYSQL_DATABASE'] || 'test'
       c.query("CREATE DATABASE IF NOT EXISTS \#{db} DEFAULT CHARACTER SET utf8mb4")
       puts "built: " + c.query("SHOW DATABASES LIKE '\#{db}'").to_a.map(&:values).join
@@ -222,7 +222,7 @@ namespace :rails do
       run_jruby(['-Ilib', '-e', <<~RUBY])
         require 'mysql2'
         c = Mysql2::Client.new(host: ENV['MYSQL_HOST'] || '127.0.0.1', port: (ENV['MYSQL_PORT'] || 13306).to_i,
-                               username: 'root', password: ENV['MYSQL_ROOT_PASSWORD'] || 'root')
+                               username: 'root', password: ENV['MYSQL_PASSWORD'] || 'root')
         %w[activerecord_unittest activerecord_unittest2].each do |db|
           c.query("CREATE DATABASE IF NOT EXISTS \#{db} DEFAULT CHARACTER SET utf8mb4")
         end
