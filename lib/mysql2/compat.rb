@@ -25,7 +25,13 @@ module Mysql2
         return if specs.any? { |s| s.name == GEM_NAME }
 
         # rebuild Bundler (the specs_by_name its `Kernel#gem` patch checks)
-        Bundler.rubygems.replace_entrypoints(specs + [alias_spec])
+        #Bundler.rubygems.replace_entrypoints(specs + [alias_spec])
+
+        # re-patch Bundler's `Kernel#gem` only with alias added to the map;
+        # must keep every current gem (incl. default gems) or `gem` rejects them
+        specs_by_name = Bundler.rubygems.add_default_gems_to(specs)
+        specs_by_name[GEM_NAME] = alias_spec
+        Bundler.rubygems.replace_gem(specs_by_name)
       end
 
       def register_with_rubygems
