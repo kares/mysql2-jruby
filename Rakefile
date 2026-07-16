@@ -89,19 +89,22 @@ task default: :compile
 
 # --- mysql2 gem's own RSpec suite, run against this gem ----------------------
 #
-# Points at an upstream mysql2 checkout (ENV MYSQL2=../mysql2) and runs its specs
+# Runs the upstream mysql2 spec suite (the ./mysql2 git submodule, or ENV MYSQL2=path)
 # with our source-built gem swapped in for the C extension.
 #
-#   MYSQL2=../mysql2 rake mysql2:db:build     # create the `test` database
-#   MYSQL2=../mysql2 rake mysql2:spec         # run spec/mysql2/*_spec.rb
-#   MYSQL2=../mysql2 rake mysql2:spec SPEC=spec/mysql2/result_spec.rb
+#   git submodule update --init mysql2        # one-time: fetch the checkout
+#   rake mysql2:db:build                       # create the `test` database
+#   rake mysql2:spec                           # run spec/mysql2/*_spec.rb
+#   rake mysql2:spec SPEC=spec/mysql2/result_spec.rb
 #
-# ENV: MYSQL2 (checkout path, default ../mysql2), SPEC (comma-separated paths
-# relative to the checkout, default spec/mysql2), MYSQL_HOST/PORT/ROOT_PASSWORD.
+# ENV: MYSQL2 (checkout path, default ./mysql2), SPEC (comma-separated paths
+# relative to the checkout, default spec/mysql2), MYSQL_HOST/PORT/USER/PASSWORD/DATABASE.
 namespace :mysql2 do
   def mysql2_checkout
-    dir = ENV['MYSQL2'] || File.expand_path('../mysql2', __dir__)
-    abort "mysql2 checkout not found (set MYSQL2=...); tried #{dir}" unless File.directory?(File.join(dir, 'spec', 'mysql2'))
+    dir = ENV['MYSQL2'] || File.expand_path('mysql2', __dir__) # the ./mysql2 git submodule
+    unless File.directory?(File.join(dir, 'spec', 'mysql2'))
+      abort "mysql2 checkout not found at #{dir} (set MYSQL2=... or run `git submodule update --init mysql2`)"
+    end
     dir
   end
 
@@ -123,10 +126,13 @@ namespace :mysql2 do
     harness = File.expand_path('test/mysql2/harness.rb', __dir__)
     excludes = File.expand_path('test/mysql2/rspec_excludes.rb', __dir__)
 
-    # Seed the suite's git-ignored local config if the checkout doesn't have one.
+    # Seed the suite's git-ignored local config if the checkout doesn't have one,
+    # rendering the template against MYSQL_HOST/PORT/USER/PASSWORD/DATABASE.
     config_dst = File.join(dir, 'spec', 'configuration.yml')
     unless File.exist?(config_dst)
-      cp File.expand_path('test/mysql2/configuration.yml', __dir__), config_dst
+      require 'erb'
+      template = File.read(File.expand_path('test/mysql2/configuration.yml', __dir__))
+      File.write(config_dst, ERB.new(template).result)
       puts "seeded #{config_dst}"
     end
 

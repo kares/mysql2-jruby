@@ -37,6 +37,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive # fetch the ./mysql2 spec-suite checkout
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -50,8 +52,15 @@ jobs:
           ruby-version: jruby-10.0.6.0
           bundler-cache: false
 
-      - name: Prepare
+      - name: Compile
         run: rake connector compile
 
       - name: Run (in-house) tests
         run: rake test
+
+      - name: Install rspec
+        run: gem install rspec -v "~>3.2" --no-document
+
+      # Runs the curated subset (test/mysql2/rspec_excludes.rb)
+      - name: Run mysql2 specs
+        run: rake mysql2:db:build mysql2:spec
