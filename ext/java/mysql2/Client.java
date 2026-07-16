@@ -395,8 +395,10 @@ public class Client extends RubyObject {
         }
     }
 
-    /** Build a Mysql2::Result over a row source (Connector/J Resultset or JDBC ResultSet).
-     *  fromStatement marks prepared-statement results (each without a block raises). */
+    /**
+     * Build a Mysql2::Result over a row source (Connector/J Resultset or JDBC ResultSet)
+     * @param fromStatement marks prepared-statement results (each without a block raises)
+     */
     Result buildResult(ThreadContext context, RowSource source, RubyHash merged, boolean fromStatement) {
         Ruby runtime = context.runtime;
         RowReader reader = new RowReader(
@@ -408,6 +410,12 @@ public class Client extends RubyObject {
                 orDefault(str(hash(context, merged, "database_timezone")), "local"),
                 str(hash(context, merged, "application_timezone")));
         boolean cacheRows = bool(hash(context, merged, "cache_rows"), true);
+        // a prepared-statement result must be buffered (can't be re-read/streamed)
+        // mysql2 forces `cache_rows` on and warns when the caller asked for false
+        if (fromStatement && !cacheRows) {
+            warn(context, ":cache_rows is forced for prepared statements (if not streaming)");
+            cacheRows = true;
+        }
         RubyClass resultClass = runtime.getModule("Mysql2").getClass("Result");
         return new Result(runtime, resultClass, reader, cacheRows, fromStatement);
     }
