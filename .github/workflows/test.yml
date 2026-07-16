@@ -34,8 +34,8 @@ jobs:
       MYSQL_USER: root
       MYSQL_PASSWORD: root
       MYSQL_DATABASE: test
-      SPEC_OPTS: --force-color            # rspec (mysql2:spec): force color in non-TTY CI
-      TEST_OPTS: --verbose                # minitest (rake test): verbose (minitest 6 can't force color)
+      SPEC_OPTS: --force-color
+      TEST_OPTS: --verbose
 
     steps:
       - uses: actions/checkout@v4
@@ -66,3 +66,71 @@ jobs:
       # Runs the curated subset (test/mysql2/rspec_excludes.rb)
       - name: Run mysql2 specs
         run: rake mysql2:db:build mysql2:spec
+
+  rails:
+    name: "rails test (Rails ${{ matrix.rails }})"
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # exact tag pins; the excludes (test/rails/excludes/mysql2) are tuned for v8.0.5
+        rails: ['v7.2.3.1', 'v8.0.5']
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      TESTOPTS: --verbose
+
+    steps:
+      - uses: actions/checkout@v4 # this gem (no submodules needed for Rails suite)
+
+      # a separate checkout of the Rails repo at the matrix version, into ./rails
+      - name: Check out Rails ${{ matrix.rails }}
+        uses: actions/checkout@v4
+        with:
+          repository: rails/rails
+          ref: ${{ matrix.rails }}
+          path: rails
+          fetch-depth: 1
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up JRuby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: jruby-10.0.6.0
+          bundler-cache: false
+
+      - name: Compile
+        run: rake connector compile
+
+      - name: Install Rails test dependencies
+        run: | # re-resolve the bundle per Rails version
+          rm -f test/rails/Gemfile.lock
+          rake rails:bundle
+
+      - name: Create databases
+        run: rake rails:db:build
+
+      - name: Run Rails ActiveRecord tests
+        run: rake rails:test

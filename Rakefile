@@ -160,18 +160,21 @@ end
 # Reuses Rails' stock Mysql2Adapter driving our Mysql2::Client. Modeled on
 # activerecord-jdbc-adapter's rakelib/rails.rake.
 #
-#   RAILS=../rails rake rails:bundle          # one-time: install test deps (network)
-#   RAILS=../rails rake rails:db:build        # create activerecord_unittest{,2}
-#   RAILS=../rails rake rails:test            # full suite (adapters/* limited to mysql2)
-#   RAILS=../rails rake 'rails:test' TEST=test/cases/transactions_test.rb
-#   AR_PREPARED_STATEMENTS=true RAILS=../rails rake rails:test TEST=...
+#   rake rails:bundle                         # one-time: install test deps (network)
+#   rake rails:db:build                       # create activerecord_unittest{,2}
+#   rake rails:test                           # full suite (adapters/* limited to mysql2)
+#   rake 'rails:test' TEST=test/cases/transactions_test.rb
+#   AR_PREPARED_STATEMENTS=true rake rails:test TEST=...
 #
-# ENV: RAILS (checkout path, default ../rails), TEST (comma-separated files),
+# Point RAILS at a Rails checkout (defaults to ./rails); on CI each matrix job
+# checks out a different Rails version there.
+#
+# ENV: RAILS (checkout path, default ./rails), TEST (comma-separated files),
 # TESTOPTS, MYSQL_HOST/PORT/USER/PASSWORD, N (minitest workers, default 0 — parallel
 # crashes on JRuby), NO_EXCLUDES.
 namespace :rails do
   def rails_ar_path
-    rails = ENV['RAILS'] || File.expand_path('../rails', __dir__)
+    rails = ENV['RAILS'] || File.expand_path('rails', __dir__) # ./rails checkout (submodule or CI clone)
     ar = File.join(rails, 'activerecord')
     abort "Rails checkout not found (set RAILS=...); tried #{rails}" unless File.directory?(File.join(ar, 'test'))
     [rails, ar]
