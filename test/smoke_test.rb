@@ -30,6 +30,19 @@ class SmokeTest < Minitest::Test
     assert_equal true, @client.ping
   end
 
+  # :url overrides the host/port/database-built JDBC URL (activerecord-jdbc-adapter style)
+  def test_connect_via_url_override
+    host = ENV['MYSQL_HOST'] || '127.0.0.1'
+    port = (ENV['MYSQL_PORT'] || 13306).to_i
+    db   = ENV['MYSQL_DATABASE'] || 'test'
+    url  = "jdbc:mysql://#{host}:#{port}/#{db}?useSSL=false&allowPublicKeyRetrieval=true"
+    client = Mysql2::Client.new(username: ENV['MYSQL_USER'] || 'root',
+                                password: ENV['MYSQL_PASSWORD'] || 'root', url: url)
+    assert_equal 1, client.query('SELECT 1 AS one').first['one']
+  ensure
+    client&.close
+  end
+
   def test_fields_and_aggregate
     res = @client.query("SELECT COUNT(*) AS n, AVG(x) AS avg_x FROM (SELECT 1 AS x UNION SELECT 3) t")
     assert_equal %w[n avg_x], res.fields

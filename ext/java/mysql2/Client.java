@@ -99,12 +99,15 @@ public class Client extends RubyObject {
         String user = str(opt(context, opts, "username", "user"));
         String pass = str(opt(context, opts, "password", "pass"));
 
-        checkAndCleanQueryOptions(context);
+        checkAndCleanQueryOptions(context); // needs to happen after :passowrd line above
 
         String encoding = orDefault(strType(context, opt(context, opts, "encoding")), "utf8mb4");
         this.clientEncoding = resolveEncoding(runtime, encoding);
 
-        this.jdbcUrl = buildJdbcUrl(context, opts).toString();
+        // :url is an escape hatch (like in activerecord-jdbc-adapter): when given it's used
+        // verbatim, overriding host/port/database and the params otherwise folded into the URL
+        final String url = str(opt(context, opts, "url"));
+        this.jdbcUrl = url != null ? url : buildJdbcUrl(context, opts).toString();
         this.jdbcProperties = new Properties();
         if (user != null) jdbcProperties.setProperty("user", user);
         if (pass != null) jdbcProperties.setProperty("password", pass);
