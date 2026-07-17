@@ -6,6 +6,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 
+import org.jcodings.specific.ASCIIEncoding;
 import org.jruby.Ruby;
 import org.jruby.RubyBignum;
 import org.jruby.RubyBoolean;
@@ -14,6 +15,7 @@ import org.jruby.RubyFloat;
 import org.jruby.RubyHash;
 import org.jruby.RubyInteger;
 import org.jruby.RubyObject;
+import org.jruby.RubyString;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.ext.bigdecimal.RubyBigDecimal;
 import org.jruby.runtime.ObjectAllocator;
@@ -78,11 +80,13 @@ public class Statement extends RubyObject {
             for (int i = 0; i < argCount; i++) bindParam(context, i + 1, args[i]);
             boolean hasResult = statement.execute();
             if (hasResult) { // null statementToClose: keep the PreparedStatement open for re-execute
+                client.afterStatementExecute(0, 0); // a result set carries no insert id (SELECT resets it)
                 return client.buildResult(context, new JdbcRowSource(statement.getResultSet(), null), client.mergedOptions(context, opts), true);
             }
             this.affectedRows = Math.max(statement.getUpdateCount(), 0);
             final ResultSet keys = statement.getGeneratedKeys();
             this.lastId = keys.next() ? keys.getLong(1) : 0;
+            client.afterStatementExecute(this.affectedRows, this.lastId);
 
             return context.nil;
         } catch (SQLException e) {
@@ -149,6 +153,10 @@ public class Statement extends RubyObject {
             statement.setBigDecimal(idx, ((RubyBigDecimal) param).getValue());
         } else if (isTemporal(param)) {
             statement.setString(idx, temporalToString(context, param));
+        } else if (param instanceof RubyString && ((RubyString) param).getEncoding() == ASCIIEncoding.INSTANCE) {
+            // binary payload (ASCII-8BIT): bind the raw bytes so charset re-encoding
+            // can't corrupt them (setString would double-encode non-ASCII bytes)
+            statement.setBytes(idx, ((RubyString) param).getBytes());
         } else {
             statement.setString(idx, param.asString().asJavaString());
         }
