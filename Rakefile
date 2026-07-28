@@ -83,9 +83,21 @@ task test: %w[compile test:db] do
   run_jruby(['-e', loader, '--', *opts])
 end
 
-desc 'Run the performance suite on this JRuby gem (compare with `ruby benchmark/run.rb` on MRI)'
+desc 'Run the mixed-scenario performance suite on this JRuby gem'
 task bench: :compile do
   run_jruby('benchmark/run.rb')
+end
+
+namespace :bench do
+  desc 'Run the per-column-type performance suite on this JRuby gem'
+  task types: :compile do
+    run_jruby('benchmark/types.rb')
+  end
+
+  desc 'Compare CRuby + mysql2 against JRuby + this gem (both via mise). BENCH_SCRIPT=run.rb for the mixed suite.'
+  task compare: :compile do
+    sh RbConfig.ruby, 'benchmark/compare.rb', *Array(ENV['BENCH_SCRIPT'])
+  end
 end
 
 task default: :compile
