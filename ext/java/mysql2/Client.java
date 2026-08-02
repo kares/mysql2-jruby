@@ -127,9 +127,8 @@ public class Client extends RubyObject {
     // NOTE: redundant except for mysql2's suite stubs it to avoid connecting...
     @JRubyMethod(name = "connect", visibility = Visibility.PRIVATE, rest = true)
     public IRubyObject connect(ThreadContext context, IRubyObject[] args) {
-        this.connection = null;
         try {
-            establishConnection(context);
+            establishConnection(context); // closes previous connection if any
         } catch (Exception e) {
             throw errorFrom(context, e);
         }
@@ -197,10 +196,14 @@ public class Client extends RubyObject {
     }
 
     /**
-     * Open the JDBC connection and apply the mysql2-equivalent session setup.
-     * Reused by #ping when reconnect: true, so init_command etc. are re-sent on reconnect.
+     * Open the JDBC connection and apply the mysql2 equivalent session setup
+     * reused by #ping when `reconnect: true` so init_command etc. are re-sent on reconnect
      */
     private Connection establishConnection(ThreadContext context) throws SQLException {
+        // replacing a still-live connection would strand it: the server keeps its thread
+        // and the socket stays open until the process exits
+        closeQuietly(this.connection);
+        this.connection = null; // a failed connect must not leave the closed one in place
         this.connection = DRIVER.connect(jdbcUrl, jdbcProperties);
         this.nativeSession = null; // re-resolve for the new physical connection
 
@@ -261,8 +264,8 @@ public class Client extends RubyObject {
 
     @JRubyMethod
     public IRubyObject close(ThreadContext context) {
-        // an explicit close disables reconnect (mysql2's nogvl_close), so a subsequent
-        // query raises "not connected" instead of silently re-establishing
+        // an explicit close disables reconnect (mysql2's nogvl_close)
+        // so a subsequent query raises "not connected" instead of silently re-establishing
         this.connReconnect = false;
         try {
             if (connection != null && !connection.isClosed()) connection.close();
@@ -319,6 +322,13 @@ public class Client extends RubyObject {
             }
         }
         throw error(context, "MySQL client is not connected");
+    }
+
+    private static void closeQuietly(Connection connection) {
+        if (connection == null) return;
+        try {
+            connection.close();
+        } catch (SQLException ignore) {}
     }
 
     // mysql_thread_id: the server's id for this connection (used by KILL etc.).

@@ -94,4 +94,40 @@ class ReconnectTest < Minitest::Test
     assert_equal true, client.ping
     refute_equal killed_id, client.thread_id, 'expected a new server connection after reconnect'
   end
+
+  # --- re-connecting must not strand the connection it replaces ----------------
+  # (the server keeps the thread of an abandoned connection until the process exits)
+
+  def test_reconnect_closes_the_replaced_connection
+    client = new_client
+    replaced_id = client.thread_id
+
+    client.send(:connect)
+
+    refute_equal replaced_id, client.thread_id
+    assert_equal 0, server_threads(replaced_id), 'replaced connection was left open on the server'
+  end
+
+  def test_repeated_reconnects_do_not_accumulate_server_threads
+    client = new_client
+    ids = [client.thread_id]
+    5.times do
+      client.send(:connect)
+      ids << client.thread_id
+    end
+
+    assert_equal 6, ids.uniq.size, 'expected a distinct server connection each time'
+    stranded = ids[0...-1].count { |id| server_threads(id) > 0 }
+    assert_equal 0, stranded, "#{stranded} of #{ids.size - 1} replaced connections left open"
+    assert_equal 1, client.query('SELECT 1 AS v').first['v'] # still usable
+  end
+
+  private
+
+  # rows in the server's process list for a connection id (0 once it is really gone)
+  def server_threads(thread_id)
+    admin = @admin ||= new_client
+    admin.query("SELECT COUNT(*) c FROM information_schema.processlist WHERE id = #{thread_id}")
+         .first['c'].to_i
+  end
 end
