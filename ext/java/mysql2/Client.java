@@ -461,11 +461,21 @@ public class Client extends RubyObject {
                 : queryOptions;
     }
 
+    // NOTE: Connector/J's ServerSession#isNoBackslashEscapesSet() reads a connect-time
+    // sql_mode snapshot and so misses a later (manual) SET; TODO: revisit this again
+    private static final int SERVER_STATUS_NO_BACKSLASH_ESCAPES = 512; // mysql_com.h
+
+    // mysql_real_escape_string: escaping depends on the server's current sql_mode
     @JRubyMethod(name = "escape_string", alias = "escape")
     public IRubyObject escape_string(ThreadContext context, IRubyObject str) {
-        return escapeString(context.runtime, str.convertToString());
+        final RubyString string = str.convertToString();
+        // re-read per call, sql_mode can change mid-connection
+        final int status = nativeSession(context).getServerSession().getStatusFlags();
+        return (status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) != 0
+                ? escapeQuotes(context.runtime, string) : escapeString(context.runtime, string);
     }
 
+    // mysql_escape_string: no connection - always the backslash form
     @JRubyMethod(meta = true, name = "escape")
     public static IRubyObject escape(ThreadContext context, IRubyObject self, IRubyObject str) {
         return escapeString(context.runtime, str.convertToString());
@@ -837,14 +847,16 @@ public class Client extends RubyObject {
 
     // --- helpers -------------------------------------------------------------
 
-    // Byte-level SQL escaping. Like mysql2/mysql_real_escape_string, the original
-    // string object is returned unchanged when nothing needs escaping.
-    private static IRubyObject escapeString(Ruby runtime, RubyString str) {
-        ByteList in = str.getByteList();
-        int n = in.length();
+    // SQL escaping like mysql2/mysql_real_escape_string,
+    // original string object is returned unchanged when nothing needs escaping
+    private static RubyString escapeString(Ruby runtime, RubyString str) {
+        final ByteList in = str.getByteList();
+        final byte[] bytes = in.getUnsafeBytes();
+        final int begin = in.begin(), n = in.length();
+
         int first = -1;
         for (int i = 0; i < n; i++) {
-            if (needsEscape((byte) in.get(i))) {
+            if (needsEscape(bytes[begin + i])) {
                 first = i; break;
             }
         }
@@ -852,9 +864,9 @@ public class Client extends RubyObject {
 
         ByteList out = new ByteList(n + 8);
         out.setEncoding(in.getEncoding());
-        out.append(in.getUnsafeBytes(), in.begin(), first); // unescaped prefix
+        out.append(bytes, begin, first); // unescaped prefix
         for (int i = first; i < n; i++) {
-            byte b = (byte) in.get(i);
+            byte b = bytes[begin + i];
             switch (b) {
                 case 0:    out.append('\\'); out.append('0'); break;
                 case '\n': out.append('\\'); out.append('n'); break;
@@ -871,6 +883,33 @@ public class Client extends RubyObject {
 
     private static boolean needsEscape(byte b) {
         return b == 0 || b == '\n' || b == '\r' || b == 0x1a || b == '\\' || b == '\'' || b == '"';
+    }
+
+    // NO_BACKSLASH_ESCAPES: a backslash is a literal character,
+    // so escaping with one would leave the quote closing the literal (an injection point)
+    // only the quote is escaped by doubling (MySQL's escape_quotes_for_mysql)
+    private static RubyString escapeQuotes(Ruby runtime, RubyString str) {
+        final ByteList in = str.getByteList();
+        final byte[] bytes = in.getUnsafeBytes();
+        final int begin = in.begin(), n = in.length();
+
+        int first = -1;
+        for (int i = 0; i < n; i++) {
+            if (bytes[begin + i] == '\'') {
+                first = i; break;
+            }
+        }
+        if (first < 0) return str;
+
+        ByteList out = new ByteList(n + 8);
+        out.setEncoding(in.getEncoding());
+        out.append(bytes, begin, first); // unquoted prefix
+        for (int i = first; i < n; i++) {
+            byte b = bytes[begin + i];
+            if (b == '\'') out.append('\'');
+            out.append(b);
+        }
+        return runtime.newString(out);
     }
 
     static RubyClass errorClass(Ruby runtime) {
