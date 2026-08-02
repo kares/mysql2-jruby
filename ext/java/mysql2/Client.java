@@ -103,12 +103,12 @@ public class Client extends RubyObject {
         checkAndCleanQueryOptions(context); // needs to happen after :passowrd line above
 
         String encoding = orDefault(strType(context, opt(context, opts, "encoding")), "utf8mb4");
-        this.clientEncoding = resolveEncoding(runtime, encoding);
+        this.clientEncoding = resolveEncoding(context, encoding);
 
         // :url is an escape hatch (like in activerecord-jdbc-adapter): when given it's used
         // verbatim, overriding host/port/database and the params otherwise folded into the URL
         final String url = str(opt(context, opts, "url"));
-        this.jdbcUrl = url != null ? url : buildJdbcUrl(context, opts).toString();
+        this.jdbcUrl = url != null ? url : buildJdbcUrl(context, opts, encoding).toString();
         this.jdbcProperties = buildJdbcProperties(context, opts);
         // credentials are layered on last so they win over :properties
         if (user != null) jdbcProperties.setProperty("user", user);
@@ -135,7 +135,7 @@ public class Client extends RubyObject {
         return this;
     }
 
-    private StringBuilder buildJdbcUrl(ThreadContext context, RubyHash opts) {
+    private StringBuilder buildJdbcUrl(ThreadContext context, RubyHash opts, String encoding) {
         String host = orDefault(str(opt(context, opts, "host", "hostname")), "localhost");
         IRubyObject portObj = opt(context, opts, "port");
         int port = portObj.isNil() ? 3306 : portObj.convertToInteger().getIntValue();
@@ -145,7 +145,8 @@ public class Client extends RubyObject {
         final StringBuilder url = new StringBuilder("jdbc:mysql://")
                 .append(host).append(':').append(port)
                 .append('/').append(database)
-                .append("?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8");
+                .append("?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=")
+                .append(javaEncodingName(encodingName(encoding)));
         // mysql2 rejects negative timeouts (write_timeout has no JDBC analog, but is still validated)
         Integer connectTimeout = intOpt(context, opts, "connect_timeout", true);
         if (connectTimeout != null) url.append("&connectTimeout=").append(connectTimeout * 1000L);
@@ -478,11 +479,28 @@ public class Client extends RubyObject {
     // mysql_real_escape_string: escaping depends on the server's current sql_mode
     @JRubyMethod(name = "escape_string", alias = "escape")
     public IRubyObject escape_string(ThreadContext context, IRubyObject str) {
-        final RubyString string = str.convertToString();
+        RubyString string = str.convertToString();
+        // escape in the connection encoding (mysql2's rb_str_export_to_enc), so the byte
+        // walk below sees the same characters the server will
+        if (string.getEncoding() != clientEncoding) {
+            string = EncodingUtils.strConvEnc(context, string, string.getEncoding(), clientEncoding);
+        }
         // re-read per call, sql_mode can change mid-connection
         final int status = nativeSession(context).getServerSession().getStatusFlags();
-        return (status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) != 0
-                ? escapeQuotes(context.runtime, string) : escapeString(context.runtime, string);
+        final RubyString escaped;
+        if ((status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) != 0) {
+            // doubling is charset-safe: 0x27 is never a trailing byte of a multibyte character
+            escaped = escapeQuotes(context.runtime, string);
+        } else {
+            escaped = needsMultibyteEscape(clientEncoding)
+                    ? escapeMultibyte(context.runtime, string, clientEncoding)
+                    : escapeString(context.runtime, string);
+        }
+        Encoding internal = context.runtime.getDefaultInternalEncoding();
+        if (internal != null && internal != escaped.getEncoding()) {
+            return EncodingUtils.strConvEnc(context, escaped, escaped.getEncoding(), internal);
+        }
+        return escaped;
     }
 
     // mysql_escape_string: no connection - always the backslash form
@@ -698,22 +716,70 @@ public class Client extends RubyObject {
         return str;
     }
 
-    private static Encoding resolveEncoding(Ruby runtime, String mysqlCharset) {
-        String name;
+    /**
+     * MySQL charset name -> Ruby encoding name, mysql2's mysql_enc_name_to_ruby table.
+     * null for charsets Ruby has no encoding for (armscii8, dec8, geostd8, hp8, keybcs2,
+     * swe7) -- mysql2 rejects those too.
+     */
+    private static String encodingName(String mysqlCharset) {
         switch (mysqlCharset.toLowerCase()) {
-            case "utf8": case "utf8mb4": case "utf8mb3": name = "UTF-8"; break;
-            case "ascii": case "us-ascii": name = "US-ASCII"; break;
-            case "binary": name = "ASCII-8BIT"; break;
-            case "latin1": name = "Windows-1252"; break;
-            default: name = mysqlCharset; break;
+            case "utf8": case "utf8mb3": case "utf8mb4": return "UTF-8";
+            case "ascii":    return "US-ASCII";
+            case "binary":   return "ASCII-8BIT";
+            case "latin1":   return "ISO-8859-1";
+            case "latin2":   return "ISO-8859-2";
+            case "latin5":   return "ISO-8859-9";
+            case "latin7":   return "ISO-8859-13";
+            case "greek":    return "ISO-8859-7";
+            case "hebrew":   return "ISO-8859-8";
+            case "big5":     return "Big5";
+            case "cp850":    return "CP850";
+            case "cp852":    return "CP852";
+            case "cp866":    return "IBM866";
+            case "cp932":    return "Windows-31J";
+            case "cp1250":   return "Windows-1250";
+            case "cp1251":   return "Windows-1251";
+            case "cp1256":   return "Windows-1256";
+            case "cp1257":   return "Windows-1257";
+            case "ujis": case "eucjpms": return "eucJP-ms";
+            case "euckr":    return "EUC-KR";
+            case "gb2312":   return "GB2312";
+            case "gb18030":  return "GB18030";
+            case "gbk":      return "GBK";
+            case "koi8r": case "koi8u": return "KOI8-R";
+            case "macce":    return "macCentEuro";
+            case "macroman": return "macRoman";
+            case "sjis":     return "Shift_JIS";
+            case "tis620":   return "TIS-620";
+            case "ucs2":     return "UTF-16BE";
+            case "utf16":    return "UTF-16";
+            case "utf16le":  return "UTF-16LE";
+            case "utf32":    return "UTF-32";
+            default:         return null;
         }
-        try {
-            org.jcodings.Encoding e = runtime.getEncodingService().getEncodingFromString(name);
-            if (e != null) return e;
-        } catch (RuntimeException ignore) {
-            // fall through
+    }
+
+    /** Same encoding under the name Java knows it by (Connector/J's characterEncoding) */
+    private static String javaEncodingName(String encodingName) {
+        switch (encodingName) {
+            case "ASCII-8BIT":  return "ISO-8859-1"; // no Java equivalent; byte-transparent
+            case "eucJP-ms":    return "EUC-JP";
+            case "macCentEuro": return "x-MacCentralEurope";
+            default:            return encodingName;
         }
-        return org.jcodings.specific.UTF8Encoding.INSTANCE;
+    }
+
+    private static Encoding resolveEncoding(ThreadContext context, String mysqlCharset) {
+        String name = encodingName(mysqlCharset);
+        if (name != null) {
+            try {
+                Encoding e = context.runtime.getEncodingService().getEncodingFromString(name);
+                if (e != null) return e;
+            } catch (RuntimeException ignore) {
+                // fall through to the raise below
+            }
+        }
+        throw error(context, "Unsupported charset: '" + mysqlCharset + "'");
     }
 
     @JRubyMethod(name = "info")
@@ -856,8 +922,6 @@ public class Client extends RubyObject {
         klass.defineConstant(name, runtime.newFixnum(value));
     }
 
-    // --- helpers -------------------------------------------------------------
-
     // SQL escaping like mysql2/mysql_real_escape_string,
     // original string object is returned unchanged when nothing needs escaping
     private static RubyString escapeString(Ruby runtime, RubyString str) {
@@ -877,23 +941,68 @@ public class Client extends RubyObject {
         out.setEncoding(in.getEncoding());
         out.append(bytes, begin, first); // unescaped prefix
         for (int i = first; i < n; i++) {
-            byte b = bytes[begin + i];
-            switch (b) {
-                case 0:    out.append('\\'); out.append('0'); break;
-                case '\n': out.append('\\'); out.append('n'); break;
-                case '\r': out.append('\\'); out.append('r'); break;
-                case 0x1a: out.append('\\'); out.append('Z'); break;
-                case '\\': case '\'': case '"':
-                    out.append('\\'); out.append(b); break;
-                default:
-                    out.append(b);
-            }
+            appendEscaped(out, bytes[begin + i]);
         }
         return runtime.newString(out);
     }
 
+    private static void appendEscaped(ByteList out, byte b) {
+        switch (b) {
+            case 0:    out.append('\\'); out.append('0'); break;
+            case '\n': out.append('\\'); out.append('n'); break;
+            case '\r': out.append('\\'); out.append('r'); break;
+            case 0x1a: out.append('\\'); out.append('Z'); break;
+            case '\\': case '\'': case '"':
+                out.append('\\'); out.append(b); break;
+            default:
+                out.append(b);
+        }
+    }
+
     private static boolean needsEscape(byte b) {
         return b == 0 || b == '\n' || b == '\r' || b == 0x1a || b == '\\' || b == '\'' || b == '"';
+    }
+
+    /**
+     * Charsets where a valid multibyte character may contain 0x5C, so escaping byte by byte is unsafe.
+     * UTF-8 is exempt: its continuation bytes are 0x80-0xBF, a backslash can never be made into a character.
+     */
+    private static boolean needsMultibyteEscape(final Encoding enc) {
+        return enc != null && !enc.isSingleByte() && enc.getCharsetName() != "UTF-8"; // BaseUTF8Encoding
+    }
+
+    /**
+     * escape_string_for_mysql's multibyte path
+     */
+    private static RubyString escapeMultibyte(Ruby runtime, RubyString str, Encoding enc) {
+        final ByteList in = str.getByteList();
+        final byte[] bytes = in.getUnsafeBytes();
+        final int begin = in.begin(), n = in.length();
+
+        ByteList out = new ByteList(n + 8);
+        out.setEncoding(in.getEncoding());
+        boolean escaped = false;
+        int i = 0;
+        while (i < n) {
+            final int p = begin + i;
+            final int charLen = enc.length(bytes, p, begin + n);
+            if (charLen > 1 && i + charLen <= n) {
+                out.append(bytes, p, charLen);
+                i += charLen;
+                continue;
+            }
+            final byte b = bytes[p];
+            if (enc.length(b) > 1) { // a lead byte that starts no valid character
+                out.append('\\');
+                out.append(b);
+                escaped = true;
+            } else {
+                if (needsEscape(b)) escaped = true;
+                appendEscaped(out, b);
+            }
+            i++;
+        }
+        return escaped ? runtime.newString(out) : str;
     }
 
     // NO_BACKSLASH_ESCAPES: a backslash is a literal character,
