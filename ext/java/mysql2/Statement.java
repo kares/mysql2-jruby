@@ -16,11 +16,15 @@ import org.jruby.RubyHash;
 import org.jruby.RubyInteger;
 import org.jruby.RubyObject;
 import org.jruby.RubyString;
+import org.jruby.RubyTime;
+import org.jruby.ext.date.RubyDate;
+import org.jruby.ext.date.RubyDateTime;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.ext.bigdecimal.RubyBigDecimal;
 import org.jruby.runtime.ObjectAllocator;
 import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
+import org.jruby.util.ByteList;
 
 /**
  * Mysql2::Statement -- native, backed by a JDBC PreparedStatement (client-side
@@ -34,7 +38,7 @@ public class Statement extends RubyObject {
     private final Client client;
     private final PreparedStatement statement;
     private final int paramCount;
-    private long affectedRows;
+    private int affectedRows;
     private long lastId;
 
     private volatile boolean closed;
@@ -136,8 +140,6 @@ public class Statement extends RubyObject {
         return context.runtime.newBoolean(closed);
     }
 
-    // --- parameter binding ---------------------------------------------------
-
     private void bindParam(ThreadContext context, int idx, IRubyObject param) throws SQLException {
         if (param.isNil()) {
             statement.setObject(idx, null);
@@ -162,13 +164,16 @@ public class Statement extends RubyObject {
         }
     }
 
-    private static boolean isTemporal(IRubyObject p) {
-        String name = p.getMetaClass().getName();
-        return "Time".equals(name) || "DateTime".equals(name) || "Date".equals(name);
+    private static boolean isTemporal(IRubyObject param) {
+        return param instanceof RubyTime || param instanceof RubyDate; // RubyDateTime extends RubyDate
     }
 
-    private static String temporalToString(ThreadContext context, IRubyObject p) {
-        String fmt = "Date".equals(p.getMetaClass().getName()) ? "%Y-%m-%d" : "%Y-%m-%d %H:%M:%S.%6N";
-        return p.callMethod(context, "strftime", context.runtime.newString(fmt)).asString().asJavaString();
+    private static final ByteList DATE_FORMAT = ByteList.create("%Y-%m-%d");
+    private static final ByteList TIME_FORMAT = ByteList.create("%Y-%m-%d %H:%M:%S.%6N");
+
+    private static String temporalToString(ThreadContext context, IRubyObject param) {
+        boolean dateOnly = param instanceof RubyDate && !(param instanceof RubyDateTime);
+        RubyString format = RubyString.newStringLight(context.runtime, dateOnly ? DATE_FORMAT : TIME_FORMAT);
+        return param.callMethod(context, "strftime", format).asString().asJavaString();
     }
 }
