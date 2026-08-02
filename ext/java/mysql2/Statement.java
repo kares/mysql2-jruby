@@ -160,6 +160,10 @@ public class Statement extends RubyObject {
             // can't corrupt them (setString would double-encode non-ASCII bytes)
             statement.setBytes(idx, ((RubyString) param).getBytes());
         } else {
+            // NOTE: with text setString is required (can not setBytes) since Connector/J picks the value encoder
+            // by Java class - a byte[] always yields a binary literal (x'..'/_binary), which compares by bytes and
+            // coerces numerically (WHERE id = ? with "1" -> id = 0x31 = 49)
+            // only the (internal) StringValueEncoder emits a charset char literal, and it only works with a String
             statement.setString(idx, param.asString().asJavaString());
         }
     }
