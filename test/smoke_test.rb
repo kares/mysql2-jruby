@@ -78,6 +78,22 @@ class SmokeTest < Minitest::Test
     client&.close
   end
 
+  def test_database_and_select_db
+    assert_equal CLIENT_OPTS[:database], @client.database
+    @client.select_db('mysql')
+    assert_equal 'mysql', @client.database
+    assert_equal 'mysql', @client.query('SELECT DATABASE() AS d').first['d']
+  end
+
+  # databaseTerm changes what getCatalog() means, so #database has to read the
+  # database directly -- as #select_db already sets it directly
+  def test_database_with_schema_database_term
+    client = Mysql2::Client.new(CLIENT_OPTS.merge(properties: { databaseTerm: 'SCHEMA' }))
+    assert_equal CLIENT_OPTS[:database], client.database
+  ensure
+    client&.close
+  end
+
   # activerecord-jdbc-adapter parity: :collation maps to the connectionCollation property
   def test_collation_option
     client = Mysql2::Client.new(CLIENT_OPTS.merge(collation: 'utf8mb4_unicode_ci'))

@@ -53,6 +53,21 @@ class ReconnectTest < Minitest::Test
     assert_includes err.message, 'MySQL client is not connected'
   end
 
+  def test_database_after_close_raises_not_connected
+    client = new_client
+    client.close
+    err = assert_raises(Mysql2::Error) { client.database }
+    assert_includes err.message, 'MySQL client is not connected'
+  end
+
+  # #connect is overridable (mysql2's suite stubs it out), so the connection may
+  # never have been established at all -- that must raise too, not NPE
+  def test_database_when_never_connected_raises_not_connected
+    stubbed = Class.new(Mysql2::Client) { def connect(*args) = self }
+    err = assert_raises(Mysql2::Error) { stubbed.new(CONN).database }
+    assert_includes err.message, 'MySQL client is not connected'
+  end
+
   def test_ping_after_close_is_false
     client = new_client
     client.close

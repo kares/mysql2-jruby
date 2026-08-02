@@ -644,7 +644,8 @@ public class Client extends RubyObject {
     @JRubyMethod(name = "database")
     public IRubyObject database(ThreadContext context) {
         try {
-            String db = connection.getCatalog();
+            // getDatabase() rather than getCatalog() whose meaning depends on Connector/J's databaseTerm setting
+            String db = connection(context).unwrap(ConnectionImpl.class).getDatabase();
             return (db == null || db.isEmpty()) ? context.nil : context.runtime.newString(db);
         } catch (SQLException e) {
             throw errorFrom(context, e);
