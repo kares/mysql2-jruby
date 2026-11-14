@@ -1,6 +1,10 @@
 package mysql2;
 
+import java.io.File;
+import java.net.MalformedURLException;
+import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.Driver;
@@ -9,12 +13,16 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
+import java.util.Collections;
+import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.net.ssl.SSLSocket;
 
 import com.mysql.cj.Constants;
 import com.mysql.cj.NativeSession;
+import com.mysql.cj.conf.ConnectionUrlParser;
 import com.mysql.cj.exceptions.CJException;
 import com.mysql.cj.jdbc.ConnectionImpl;
 import com.mysql.cj.jdbc.JdbcStatement;
@@ -22,6 +30,7 @@ import com.mysql.cj.jdbc.NonRegisteringDriver;
 import com.mysql.cj.jdbc.exceptions.SQLExceptionsMapping;
 import com.mysql.cj.protocol.ProtocolEntityFactory;
 import com.mysql.cj.protocol.Resultset;
+import com.mysql.cj.protocol.SocketConnection;
 import com.mysql.cj.protocol.a.NativeMessageBuilder;
 import com.mysql.cj.protocol.a.NativePacketPayload;
 import com.mysql.cj.protocol.a.NativeProtocol;
@@ -108,8 +117,8 @@ public class Client extends RubyObject {
         // :url is an escape hatch (like in activerecord-jdbc-adapter): when given it's used
         // verbatim, overriding host/port/database and the params otherwise folded into the URL
         final String url = str(opt(context, opts, "url"));
-        this.jdbcUrl = url != null ? url : buildJdbcUrl(context, opts, encoding).toString();
-        this.jdbcProperties = buildJdbcProperties(context, opts);
+        this.jdbcUrl = url != null ? url : buildJdbcUrl(context, opts).toString();
+        this.jdbcProperties = buildJdbcProperties(context, opts, encoding, this.jdbcUrl);
         // credentials are layered on last so they win over :properties
         if (user != null) jdbcProperties.setProperty("user", user);
         if (pass != null) jdbcProperties.setProperty("password", pass);
@@ -135,65 +144,140 @@ public class Client extends RubyObject {
         return this;
     }
 
-    private StringBuilder buildJdbcUrl(ThreadContext context, RubyHash opts, String encoding) {
+    private StringBuilder buildJdbcUrl(ThreadContext context, RubyHash opts) {
         String host = orDefault(str(opt(context, opts, "host", "hostname")), "localhost");
+        validateHost(context, host);
+        if (host.indexOf(':') >= 0 && !host.startsWith("[")) {
+            host = "[" + host + "]"; // bracket bare IPv6 literal
+        }
         IRubyObject portObj = opt(context, opts, "port");
         int port = portObj.isNil() ? 3306 : portObj.convertToInteger().getIntValue();
         String database = orDefault(str(opt(context, opts, "database", "dbname", "db")), "");
+        // Connector/J URL-decodes the path segment; percent-encoding prevents `?` or `#`
+        // in a database name from being parsed as URL query parameters or fragments
+        String encodedDb = database.isEmpty() ? "" :
+                URLEncoder.encode(database, StandardCharsets.UTF_8).replace("+", "%20");
 
-        // NOTE: SSL is deliberately left off for now (useSSL=false)
-        final StringBuilder url = new StringBuilder("jdbc:mysql://")
+        return new StringBuilder("jdbc:mysql://")
                 .append(host).append(':').append(port)
-                .append('/').append(database)
-                .append("?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=")
-                .append(javaEncodingName(encodingName(encoding)));
-        // mysql2 rejects negative timeouts (write_timeout has no JDBC analog, but is still validated)
+                .append('/').append(encodedDb);
+    }
+
+    private static void validateHost(ThreadContext context, String host) {
+        for (int i = 0; i < host.length(); i++) {
+            char c = host.charAt(i);
+            if (c == '/' || c == '?' || c == '#' || c == '@' || Character.isWhitespace(c)) {
+                throw error(context, "Invalid host: '" + host + "'");
+            }
+        }
+    }
+
+    private Properties buildJdbcProperties(ThreadContext context, RubyHash opts, String encoding, String url) {
+        final Properties jdbcProperties = new Properties();
+
+        // 1. Load user :properties first so explicit top-level mysql2 options can override them,
+        //    while any driver property not set by top-level options is preserved
+        IRubyObject propertiesOpt = opt(context, opts, "properties");
+        if (propertiesOpt instanceof RubyHash) {
+            final RubyHash properties = (RubyHash) propertiesOpt;
+            final RubyArray<?> propertiesKeys = properties.keys();
+            for (int i = 0; i < propertiesKeys.size(); i++) {
+                final IRubyObject key = propertiesKeys.eltInternal(i);
+                final IRubyObject val = properties.fastARef(key);
+                if (val != null && !val.isNil()) {
+                    jdbcProperties.setProperty(key.toString(), str(val));
+                }
+            }
+        }
+
+        // Extract any query properties already present on a custom :url so default
+        // fallbacks don't clobber query parameters the caller put in :url
+        Map<String, String> urlProperties = parseUrlProperties(url);
+
+        // 2. :encoding drives the connection charset (mysql2's MYSQL_SET_CHARSET_NAME), so the
+        //    server reads queries in the same encoding #query transcodes them to
+        if (!opt(context, opts, "encoding").isNil()
+                || !SslSupport.hasKeyIgnoreCase(jdbcProperties, urlProperties, "characterEncoding")) {
+            jdbcProperties.setProperty("characterEncoding", javaEncodingName(encodingName(encoding)));
+        }
+
+        String collation = str(opt(context, opts, "collation"));
+        if (collation != null) jdbcProperties.setProperty("connectionCollation", collation);
+
+        // 3. Timeouts: mysql2 rejects negative timeouts (write_timeout has no JDBC analog, but is still validated)
         Integer connectTimeout = intOpt(context, opts, "connect_timeout", true);
-        if (connectTimeout != null) url.append("&connectTimeout=").append(connectTimeout * 1000L);
+        if (connectTimeout != null) {
+            jdbcProperties.setProperty("connectTimeout", Long.toString(connectTimeout * 1000L));
+        }
         intOpt(context, opts, "write_timeout", true);
         Integer readTimeout = intOpt(context, opts, "read_timeout", true);
         if (readTimeout != null) {
             this.readTimeoutSeconds = readTimeout.shortValue();
             // read_timeout > 0 maps to JDBC socketTimeout (seconds -> ms)
-            // read_timeout == 0 is applied after connect; JDBC treats socketTimeout = 0  as "infinite",
-            // the opposite of mysql2's "fail unless the response is ready ~immediately
-            if (readTimeout > 0) url.append("&socketTimeout=").append(readTimeout * 1000L);
+            // read_timeout == 0 is applied after connect; JDBC treats socketTimeout = 0 as "infinite",
+            // the opposite of mysql2's "fail unless the response is ready ~immediately"
+            if (readTimeout > 0) {
+                jdbcProperties.setProperty("socketTimeout", Long.toString(readTimeout * 1000L));
+            }
         }
+
+        // 4. Local infile & FOUND_ROWS
         // NOTE: JDBC autoReconnect is deliberately not used; it's deprecated and fails to
         // reconnect after the server drops the connection; #ping reconnects manually instead
-        if (bool(opt(context, opts, "local_infile"), false)) {
-            url.append("&allowLoadLocalInfile=true");
+        IRubyObject localInfileOpt = opt(context, opts, "local_infile");
+        if (!localInfileOpt.isNil()) {
+            jdbcProperties.setProperty("allowLoadLocalInfile", Boolean.toString(localInfileOpt.isTrue()));
         }
 
         // CLIENT_FOUND_ROWS: report rows *matched* by an UPDATE rather than rows *changed*
         // (ActiveRecord relies on this); Connector/J's default (useAffectedRows=false) already
         // means matched rows -- like the flag being set -- so only when :flags omits FOUND_ROWS
         // (mysql2's default) do we flip to changed rows, matching libmysql without the flag...
-        if (!hasFlag(context, opts, "FOUND_ROWS", FOUND_ROWS)) url.append("&useAffectedRows=true");
-
-        return url;
-    }
-
-    private Properties buildJdbcProperties(ThreadContext context, RubyHash opts) {
-        final Properties jdbcProperties = new Properties();
-
-        IRubyObject propertiesOpt = opt(context, opts, "properties");
-        if (propertiesOpt instanceof RubyHash) {
-            final RubyHash properties = (RubyHash) propertiesOpt;
-            final RubyArray propertiesKeys = properties.keys();
-            for (int i = 0; i < propertiesKeys.size(); i++) {
-                final IRubyObject key = propertiesKeys.eltInternal(i);
-                final IRubyObject val = properties.fastARef(key);
-                if (val != null && !val.isNil()) {
-                    jdbcProperties.put(key.toString(), val.asJavaString());
-                }
-            }
+        if (hasFlag(context, opts, "FOUND_ROWS", FOUND_ROWS)) {
+            jdbcProperties.setProperty("useAffectedRows", "false");
+        } else if (!SslSupport.hasKeyIgnoreCase(jdbcProperties, urlProperties, "useAffectedRows")) {
+            jdbcProperties.setProperty("useAffectedRows", "true");
         }
 
-        String collation = str(opt(context, opts, "collation"));
-        if (collation != null) jdbcProperties.setProperty("connectionCollation", collation);
+        if (hasFlag(context, opts, "COMPRESS", COMPRESS)) {
+            jdbcProperties.setProperty("useCompression", "true");
+        }
+        if (hasFlag(context, opts, "INTERACTIVE", INTERACTIVE)) {
+            jdbcProperties.setProperty("interactiveClient", "true");
+        }
+
+        // 5. Public key retrieval (:get_server_public_key / :server_public_key_path / allowPublicKeyRetrieval)
+        String serverPubKeyPath = str(opt(context, opts, "server_public_key_path"));
+        if (serverPubKeyPath != null) {
+            jdbcProperties.setProperty("serverRSAPublicKeyFile", serverPubKeyPath);
+        }
+        IRubyObject getServerPubKey = opt(context, opts, "get_server_public_key");
+        if (!getServerPubKey.isNil()) {
+            jdbcProperties.setProperty("allowPublicKeyRetrieval", Boolean.toString(getServerPubKey.isTrue()));
+        } else if (!SslSupport.hasKeyIgnoreCase(jdbcProperties, urlProperties, "allowPublicKeyRetrieval")) {
+            jdbcProperties.setProperty("allowPublicKeyRetrieval", "true");
+        }
+
+        String defaultAuth = str(opt(context, opts, "default_auth"));
+        if (defaultAuth != null) {
+            jdbcProperties.setProperty("defaultAuthenticationPlugin", defaultAuth);
+        }
+
+        // 6. SSL/TLS configuration (C mysql2 options + AR-JDBC keystore options + Connector/J properties)
+        SslSupport.configureSsl(context, opts, jdbcProperties, urlProperties);
 
         return jdbcProperties;
+    }
+
+    private static Map<String, String> parseUrlProperties(String url) {
+        if (url == null || url.indexOf('?') < 0 && url.indexOf('(') < 0) {
+            return Collections.emptyMap();
+        }
+        try {
+            return ConnectionUrlParser.parseConnectionString(url).getProperties();
+        } catch (Exception e) {
+            return Collections.emptyMap();
+        }
     }
 
     /**
@@ -237,23 +321,36 @@ public class Client extends RubyObject {
         return hasFlag(context, opts, "MULTI_STATEMENTS", MULTI_STATEMENTS);
     }
 
-    /** Whether :flags requests a capability, given as an Integer bitmask or an Array of flag names */
-    private static boolean hasFlag(ThreadContext context, RubyHash opts, String name, long bit) {
+    /** Whether :flags requests a capability, given as an Integer bitmask, an Array of flag names, or a space-separated String */
+    static boolean hasFlag(ThreadContext context, RubyHash opts, String name, long bit) {
         IRubyObject flags = opt(context, opts, "flags");
         if (flags == null || flags.isNil()) return false;
         if (flags instanceof RubyArray<?>) {
             final RubyArray<?> flagsAry = (RubyArray<?>) flags;
+            boolean matched = false;
             for (int i = 0; i < flagsAry.size(); i++) {
                 final IRubyObject e = flagsAry.eltInternal(i);
-                if (e != null && !e.isNil() && name.equals(e.asJavaString())) return true;
+                if (e != null && !e.isNil()) {
+                    String s = e.toString();
+                    if (name.equals(s)) matched = true;
+                    else if (("-" + name).equals(s)) matched = false;
+                }
             }
-            return false;
+            return matched;
+        }
+        if (flags instanceof RubyString) {
+            boolean matched = false;
+            for (String token : flags.asJavaString().trim().split("\\s+")) {
+                if (name.equals(token)) matched = true;
+                else if (("-" + name).equals(token)) matched = false;
+            }
+            return matched;
         }
         return flags instanceof RubyFixnum && (((RubyFixnum) flags).getLongValue() & bit) != 0;
     }
 
     /** Integer option (seconds/count), or null when absent or non-numeric. */
-    private static Integer intOpt(ThreadContext context, RubyHash opts, String name, boolean checkPositive) {
+    static Integer intOpt(ThreadContext context, RubyHash opts, String name, boolean checkPositive) {
         IRubyObject v = opt(context, opts, name);
         if (v == null || v.isNil()) return null;
         final int val = v.convertToInteger().getIntValue();
@@ -542,6 +639,28 @@ public class Client extends RubyObject {
     @JRubyMethod(name = "warning_count")
     public IRubyObject warning_count(ThreadContext context) {
         return context.runtime.newFixnum(warningCount);
+    }
+
+    // mysql_get_ssl_cipher: active TLS cipher name (in OpenSSL format to match MySQL's
+    // SHOW STATUS LIKE 'Ssl_cipher'), or nil when the connection is not using SSL
+    @JRubyMethod(name = "ssl_cipher")
+    public IRubyObject ssl_cipher(ThreadContext context) {
+        if (connection == null) return context.nil;
+        try {
+            if (connection.isClosed()) return context.nil;
+            SocketConnection sc = nativeSessionImpl(context, connection).getProtocol().getSocketConnection();
+            if (sc == null || !sc.isSSLEstablished()) return context.nil;
+            Socket sock = sc.getMysqlSocket();
+            if (sock instanceof SSLSocket) {
+                String suite = ((SSLSocket) sock).getSession().getCipherSuite();
+                if (suite != null && !"SSL_NULL_WITH_NULL_NULL".equals(suite)) {
+                    return context.runtime.newString(SslSupport.toOpenSslCipherName(suite));
+                }
+            }
+        } catch (Exception ignore) {
+            // return nil when not connected or no SSL session
+        }
+        return context.nil;
     }
 
     // mysql_set_server_option (COM_SET_OPTION)
@@ -1162,7 +1281,7 @@ public class Client extends RubyObject {
         queryOptions.delete(context, runtime.newSymbol("pass"));
     }
 
-    private static void warn(ThreadContext context, String message) {
+    static void warn(ThreadContext context, String message) {
         IRubyObject stderr = context.runtime.getGlobalVariables().get("$stderr");
         stderr.callMethod(context, "puts", context.runtime.newString(message));
     }

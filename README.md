@@ -79,9 +79,12 @@ end
 
 Connection options: `:host`/`:hostname`, `:port`, `:username`, `:password`, `:database`/`:dbname`/`:db`,
 `:encoding`, `:collation`, `:connect_timeout`, `:read_timeout`, `:write_timeout` (validated, no JDBC
-analog), `:init_command`, `:reconnect`, `:local_infile`, `:flags` (Integer bitmask or Array of flag names,
-e.g. `["MULTI_STATEMENTS"]`), plus two JDBC escape hatches: `:url` (used verbatim, overriding
-host/port/database) and `:properties` (a Hash passed to the driver).
+analog), `:init_command`, `:reconnect`, `:local_infile`, `:get_server_public_key`, `:server_public_key_path`,
+`:default_auth`, `:ssl_mode` (`:disabled`, `:preferred`, `:required`, `:verify_ca`, `:verify_identity` or
+`SSL_MODE_*` constants), `:sslca`, `:sslcapath`, `:sslcert`, `:sslkey`, `:sslcipher`, `:sslverify`,
+`:flags` (Integer bitmask, Array, or space-separated String of flag names, e.g. `["MULTI_STATEMENTS"]`),
+plus two JDBC escape hatches: `:url` (used verbatim, overriding host/port/database) and `:properties`
+(a Hash passed to the driver).
 
 Query options are mysql2's and behave the same: `:as`, `:symbolize_keys`, `:cast`, `:cast_booleans`,
 `:database_timezone`, `:application_timezone`, `:cache_rows`.
@@ -117,51 +120,54 @@ they are JRuby core issues (Marshal, `Array#-`, SnakeYAML limits), not adapter g
 
 ## Limitations
 
-Everything below is a deliberate gap, not a bug - C client either exposes things 
-a JDBC connection has no equivalent for, or the feature was deferred.
+Because this gem runs on top of JDBC rather than *libmysqlclient*, some features from 
+the C `mysql2` gem either have no JDBC equivalent or behave (slightly) differently.
 
-**Not Implemented**
+### Not supported
 
-- **Async / EventMachine** — no `Mysql2::EM`; the `:async` query option is accepted (it is in
-  `default_query_options`) but ignored, queries are always synchronous.
-- **Streaming** (`stream: true`) — results are always buffered client-side and re-iterable,
-  so single-pass semantics don't apply.
-- **Multi-result iteration** — `more_results?`, `next_result` and `store_result` are missing.
-  Multi-statement queries work (`:flags => [MULTI_STATEMENTS]` / `set_server_option`), but only
-  the first result set is returned; the rest are drained. `abandon_results!` is implemented,
-  which is what ActiveRecord's batch path uses.
-- **`#socket`** — there is no file descriptor behind a JDBC connection.
-- **Unix sockets** (`:socket`) — Connector/J is TCP only; the option is ignored.
-- **libmysqlclient config files** — `:default_file`, `:default_group`, `:secure_auth`,
-  `:connect_attrs` have no Connector/J counterpart.
-- **`#automatic_close`** — a no-op stub. There is no `fork`, and sockets are owned by the JVM.
+- **Async / EventMachine** — `Mysql2::EM` is not provided. The `:async` query option is accepted
+  for compatibility, but queries always run synchronously.
+- **Streaming** (`stream: true`) — result sets are buffered in memory and can be iterated multiple
+  times; single-pass streaming is not implemented yet.
+- **Iterating multiple result sets** — `more_results?`, `next_result`, and `store_result` are not
+  implemented. Multi-statement queries work (`flags: ["MULTI_STATEMENTS"]` or `set_server_option`),
+  returning the first result set and draining the rest (`abandon_results!` is supported for
+  ActiveRecord's batch execution).
+- **Unix domain sockets** (`:socket`) and **`#socket`** — Connector/J connects over TCP/IP by
+  default and does not expose an underlying OS file descriptor.
+- **libmysqlclient option files** — `:default_file`, `:default_group`, `:secure_auth`, and
+  `:connect_attrs` are specific to *libmysqlclient* and ignored here.
+- **`#automatic_close`** — kept as a no-op stub since JVM does not support `fork`.
 
-**Behaves differently**
+### Behavioral differences
 
-- **`:flags` is read, not passed through.** Only `FOUND_ROWS`, `MULTI_STATEMENTS` and
-  `LOCAL_FILES` change behaviour; the rest of the bitmask is accepted and ignored (the
-  handshake capabilities are Connector/J's). `Mysql2::Client` still defines the flag
-  constants (`FOUND_ROWS`, `MULTI_STATEMENTS`, `SSL_MODE_*`, …) so option hashes carried
-  over from the C gem keep resolving.
-- **Prepared statements are client-side.** Connector/J interpolates binds by default
-  (`useServerPrepStmts=false`), so the server's `Prepared_stmt_count` doesn't move and a bound
-  `Time`/`DateTime` comes back as `VAR_STRING` rather than a typed `DATETIME`. Real typed
-  columns — what ActiveRecord reads — are unaffected. Pass
-  `properties: { useServerPrepStmts: "true" }` to switch.
-- **A query in flight can't be interrupted.** JRuby can't preempt a blocking JDBC socket read,
-  so `Timeout`/`Thread#raise` only fires once the query completes and the connection stays
-  healthy rather than being torn down. Use `:read_timeout` (JDBC `socketTimeout`) to bound a query.
-- **`Mysql2::Error` messages and SQLSTATEs are Connector/J's.** `#error_number` is the real
-  MySQL vendor errno, but the text differs — e.g. a killed connection reports
-  "Communications link failure" (`08S01`), not "Lost connection to MySQL server".
-- **Result server flags** — `query_was_slow` / `no_index_used` are not surfaced by JDBC.
-- **No concurrent-use guard.** The C client raises when two threads use one connection; here
-  the behaviour is Connector/J's. Don't share a `Mysql2::Client` across threads — use a pool
-  (ActiveRecord already does).
-- **SSL options are Java keystores.** `:sslkey`/`:sslcert`/`:sslca` turn TLS on and are passed
-  to Connector/J as keystore URLs, *not* PEM files (as in activerecord-jdbc-adapter).
-  `:ssl_mode` is not read — the `SSL_MODE_*` constants exist, but pass
-  `properties: { sslMode: "VERIFY_IDENTITY" }` to set it.
+- **`:flags` are mapped to driver properties.** Common flags (`FOUND_ROWS`, `MULTI_STATEMENTS`,
+  `LOCAL_FILES`, `SSL`, `SSL_VERIFY_SERVER_CERT`, `COMPRESS`, `INTERACTIVE`) are translated into
+  their Connector/J equivalents. Other bitmask flags are accepted and ignored, and all
+  `Mysql2::Client` flag constants remain defined so existing configs work without changes.
+- **Client-side prepared statements by default.** Connector/J *emulates* prepared statements on 
+  the client (`useServerPrepStmts=false`), so `Prepared_stmt_count` on the server does not 
+  increment; bound `Time`/`DateTime` parameters return as `VAR_STRING` unless cast from a typed 
+  table column. You can opt into server-side prepared statements with
+  `properties: { useServerPrepStmts: "true" }`.
+- **In-flight queries cannot be interrupted by `Thread#raise` / `Timeout.timeout`.** 
+  JRuby cannot preempt a blocking JDBC socket read, so Ruby timeouts only fire after the query 
+  finishes. Use `:read_timeout` (mapped to JDBC `socketTimeout`) to bound query execution time.
+- **Error messages and SQLSTATEs come from Connector/J.** `Mysql2::Error#error_number` still
+  reports the MySQL server error code, but client-side failures (such as a dropped connection)
+  use Connector/J's wording and SQLSTATE (e.g. `"Communications link failure"` / `08S01`).
+- **Server status flags on results** — `query_was_slow` and `no_index_used` are not supported.
+- **Thread safety** — unlike the C extension, which raises immediately on concurrent access, thread
+  behavior follows Connector/J. Avoid sharing a single `Mysql2::Client` across threads; use a
+  connection pool (as ActiveRecord does).
+- **SSL accepts both PEM files and Java keystores.** `:sslca`, `:sslcapath`, `:sslcert`, and
+  `:sslkey` work with standard PEM files as well as `.p12`/`.jks` keystores (compatible with
+  `activerecord-jdbc-adapter`). When using `:verify_ca` or `:verify_identity` without `:sslca`,
+  Connector/J verifies against the JVM's default system truststore (`cacerts`).
+- **Public key retrieval (`caching_sha2_password`).** To allow local TCP connections to MySQL 8+
+  out of the box when SSL is off, `allowPublicKeyRetrieval` defaults to `true`. On untrusted
+  networks without SSL, pass `get_server_public_key: false` (and optionally
+  `server_public_key_path: "/path/to/public_key.pem"`).
 
 ## License
 
