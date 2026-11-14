@@ -9,8 +9,6 @@ module Mysql2
     ConnectionError = Class.new(Error)
     TimeoutError = Class.new(Error)
 
-    # SQLSTATE / vendor-code mapping is coarse in this JDBC-backed prototype;
-    # a few well-known connection-class codes are routed to ConnectionError.
     CODES = {
       1205 => TimeoutError,
       1044 => ConnectionError, 
@@ -22,7 +20,6 @@ module Mysql2
     }.freeze
 
     attr_reader :error_number, :sql_state
-
     # Mysql gem compatibility
     alias errno error_number
     alias error message
