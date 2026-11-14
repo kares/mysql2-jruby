@@ -46,7 +46,7 @@ task :compile do
   end
   mkdir_p CLASSES
   cp = [jruby_jar, CONNECTOR].join(File::PATH_SEPARATOR)
-  sh "javac -cp #{cp.inspect} -d #{CLASSES} #{JAVA_SRC.join(' ')}"
+  sh "javac --release 11 -cp #{cp.inspect} -d #{CLASSES} #{JAVA_SRC.join(' ')}"
   sh "jar cf #{JAR} -C #{CLASSES} ."
 end
 
@@ -186,7 +186,8 @@ end
 # crashes on JRuby), NO_EXCLUDES.
 namespace :rails do
   def rails_ar_path
-    rails = ENV['RAILS'] || File.expand_path('rails', __dir__) # ./rails checkout (submodule or CI clone)
+    # absolute — a relative RAILS would resolve against test/rails/ (the Gemfile dir) in the bundle
+    rails = ENV['RAILS'] ? File.expand_path(ENV['RAILS']) : File.expand_path('rails', __dir__)
     ar = File.join(rails, 'activerecord')
     abort "Rails checkout not found (set RAILS=...); tried #{rails}" unless File.directory?(File.join(ar, 'test'))
     [rails, ar]
