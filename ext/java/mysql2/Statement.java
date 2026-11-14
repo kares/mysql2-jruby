@@ -88,8 +88,9 @@ public class Statement extends RubyObject {
                 return client.buildResult(context, new JdbcRowSource(statement.getResultSet(), null), client.mergedOptions(context, opts), true);
             }
             this.affectedRows = Math.max(statement.getUpdateCount(), 0);
-            final ResultSet keys = statement.getGeneratedKeys();
-            this.lastId = keys.next() ? keys.getLong(1) : 0;
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                this.lastId = keys.next() ? keys.getLong(1) : 0;
+            }
             client.afterStatementExecute(this.affectedRows, this.lastId);
 
             return context.nil;
