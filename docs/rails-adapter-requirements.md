@@ -101,7 +101,7 @@ path is `Client#query`, not `Statement`. Prepared path is exercised when a user 
       closes its statement (draining pending multi-results), so nothing lingers.
 
 ### P1 — connection options Rails passes and expects honored
-Done (`Client#initialize`, verified with `prototype/options_smoke.rb`):
+Done (`Client#initialize`, verified against live MySQL):
 - [x] **`flags` handling** — accepts Integer bitmask **or** Array of String names
       (`@config[:flags]` may be either — mysql2_adapter:61). `MULTI_STATEMENTS` (bit
       `65536` / `"MULTI_STATEMENTS"`) enables multi-queries once at connect
@@ -173,7 +173,7 @@ s.enableMultiQueries();   // or s.disableMultiQueries();
 (`enable/disableMultiQueries` are on the concrete `NativeSession`, not the `Session`
 interface — so the `ConnectionImpl` unwrap is required.)
 
-#### Empirically validated (see `prototype/MultiQueryProbe*.java`, live MySQL 8.0)
+#### Empirically validated (live MySQL 8.0)
 Connecting **without** `allowMultiQueries`:
 1. Plain `execute("SELECT 1; SELECT 2")` → server syntax error. ✔ expected
 2. `enableMultiQueries()` then the same `execute` → both result sets returned, iterated via
@@ -193,7 +193,7 @@ Connecting **without** `allowMultiQueries`:
 - [x] **`Client#query`** — unchanged; first result processed, rest drained on statement close.
 - [x] Helper `nativeSession()` on `Client` — caches `conn.unwrap(ConnectionImpl.class).getSession()`.
 
-Verified with `prototype/batch_smoke.rb` (JRuby, live MySQL): the full Rails pattern
+Verified (JRuby, live MySQL): the full Rails pattern
 (`set_server_option(ON)` → multi-statement `query` → `abandon_results!` →
 `set_server_option(OFF)`) works, including the `SET TRANSACTION …; BEGIN` shape; unknown
 option returns `false`; multi-statement is rejected when the toggle is OFF. Client-spec:
@@ -218,7 +218,7 @@ failures only.
 
 ### P3 — correctness polish
 - [x] **`Error#error_number` returns the MySQL vendor code** — driver `getErrorCode()` passes
-      the server errno through unmodified. Verified via `prototype/error_probe.rb` against live
+      the server errno through unmodified. Verified against live
       MySQL: `ER_DUP_ENTRY 1062`, `ER_NO_REFERENCED_ROW_2 1452`, `ER_ROW_IS_REFERENCED_2 1451`,
       `ER_BAD_NULL_ERROR 1048`, `ER_DATA_TOO_LONG 1406`, `ER_WARN_DATA_OUT_OF_RANGE 1264`,
       `ER_PARSE_ERROR 1064`, `ER_NO_SUCH_TABLE 1146`, `ER_BAD_DB_ERROR 1049` all correct. So
@@ -349,7 +349,7 @@ the byte-caster — passes cleanly through the real adapter. The transaction-iso
 exercise the P2 multi-statement batch path (`SET TRANSACTION …; BEGIN` via
 `enableMultiQueries()`) end-to-end.
 
-**Prepared-statement path** (`prepared_statements: true`, `prototype/ar/config_prepared.yml`):
+**Prepared-statement path** (`prepared_statements: true`):
 Rails' default for mysql2 is unprepared, but the prepared path
 (`raw_connection.prepare(sql)` → `stmt.execute(*binds)` → `stmt.affected_rows` → `stmt.close`,
 backed by our client-side JDBC `PreparedStatement` reusing the text-protocol byte caster)

@@ -1,43 +1,21 @@
+MIT License
 
-Copyright (C) 2026 Karol Bucek
+Copyright (c) 2026 Karol Bucek
 
-This program is free software; you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free Software
-Foundation; version 2 of the License.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY
-WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-You should have received a copy of the GNU General Public License along with
-this program (see the COPYING file); if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-
-
-================================================================================
-Note on MySQL Connector/J
-================================================================================
-
-At run time this gem links MySQL Connector/J (the `com.mysql:mysql-connector-j`
-JDBC driver) and calls its Java API directly, so a program combining the two is
-a combined work in the sense of the GNU GPL.
-
-Connector/J is distributed by Oracle under a dual license:
-
-  * the GNU General Public License, version 2 (GPLv2) *only*, together with the
-    "Universal FOSS Exception, version 1.0"; or
-  * a separate commercial license from Oracle.
-
-This gem is licensed under GPLv2 *only* — the same version Connector/J uses.
-
-Accordingly:
-
-  * This gem's own source (lib/, ext/) is licensed GPLv2-only; see COPYING
-  * Connector/J is NOT bundled or redistributed by this gem.  It is declared as
-    an external requirement and obtained separately (e.g. `rake connector`, or
-    from Maven Central / Oracle).  Connector/J remains under its own license
-    (GPLv2 + Universal FOSS Exception, or Oracle commercial); this project does
-    not, and cannot, relicense it
-
-Reproducing mysql2's Ruby API is an interface reimplementation and does not make
-this a derivative of the upstream mysql2 gem (MIT-licensed).
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

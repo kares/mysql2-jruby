@@ -4,7 +4,7 @@ Gem::Specification.new do |s|
   s.name     = 'mysql2-jruby'
   s.version  = Mysql2::VERSION
   s.platform = 'java'
-  s.license  = 'GPL-2.0-only'
+  s.license  = 'MIT'
   s.summary  = 'A simple, fast MySQL library for JRuby'
   s.description = "JRuby native re-implementation of the Mysql2 gem, " +
                   "with emphasis on being able to run ActiveRecord, " +
