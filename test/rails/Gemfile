@@ -31,6 +31,7 @@ group :test do
   gem "erubis", require: nil
   gem "msgpack", "~> 1.7", require: false
   gem "rack", require: nil
+  gem "tzinfo-data"
   gem "zeitwerk"
   gem "minitest-excludes", require: nil
 end
