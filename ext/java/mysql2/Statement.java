@@ -128,13 +128,14 @@ public class Statement extends RubyObject {
 
     @JRubyMethod
     public IRubyObject close(ThreadContext context) {
-        try {
-            if (!closed) {
+        if (!closed) {
+            try {
                 statement.close();
+            } catch (SQLException e) {
+                throw client.errorFrom(context, e);
+            } finally {
                 closed = true;
             }
-        } catch (SQLException e) {
-            throw client.errorFrom(context, e);
         }
         return context.nil;
     }
