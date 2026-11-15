@@ -108,11 +108,11 @@ class SslTest < Minitest::Test
   end
 
   def test_sslcipher_with_openssl_and_iana_names
-    # OpenSSL cipher name (TLS 1.2 DHE-RSA-AES256-SHA, as used in upstream mysql2 specs)
-    client = Mysql2::Client.new(**CLIENT_OPTS, sslcipher: 'DHE-RSA-AES256-SHA')
+    # OpenSSL cipher name (TLS 1.2 ECDHE-RSA-AES128-GCM-SHA256, supported in both MySQL 8.0 and 8.4)
+    client = Mysql2::Client.new(**CLIENT_OPTS, sslcipher: 'ECDHE-RSA-AES128-GCM-SHA256')
     status = server_ssl_status(client)
-    assert_equal 'DHE-RSA-AES256-SHA', status['Ssl_cipher']
-    assert_equal 'DHE-RSA-AES256-SHA', client.ssl_cipher
+    assert_equal 'ECDHE-RSA-AES128-GCM-SHA256', status['Ssl_cipher']
+    assert_equal 'ECDHE-RSA-AES128-GCM-SHA256', client.ssl_cipher
     client.close
 
     # IANA / JSSE cipher name (TLS 1.3)
@@ -397,23 +397,65 @@ class SslTest < Minitest::Test
   end
 
   def fetch_server_certs
-    datadir_row = @client.query("SHOW VARIABLES LIKE 'datadir'").first
-    return {} unless datadir_row
-
-    # Read ca.pem, client-cert.pem, client-key.pem, public_key.pem from server container if accessible
     certs = {}
-    {
-      ca_pem: 'ca.pem',
-      client_cert_pem: 'client-cert.pem',
-      client_key_pem: 'client-key.pem',
-      public_key_pem: 'public_key.pem'
-    }.each do |key, filename|
-      pem = `podman exec jruby-mysql2-bench cat /var/lib/mysql/#{filename} 2>/dev/null`.delete("\0")
-      certs[key] = pem if $?.success? && pem.include?('-----BEGIN ')
+
+    # 1. Fetch RSA public key directly via SQL (works everywhere, no container exec needed)
+    pub_row = @client.query("SHOW STATUS LIKE 'Caching_sha2_password_rsa_public_key'").first
+    if pub_row && pub_row['Value']&.include?('-----BEGIN ')
+      certs[:public_key_pem] = pub_row['Value']
     end
+
+    # 2. Fetch server CA certificate directly from the TLS handshake peer certificate chain
+    begin
+      ssl_client = Mysql2::Client.new(**CLIENT_OPTS, ssl_mode: :required)
+      conn_field = ssl_client.to_java.getClass.getDeclaredField('connection')
+      conn_field.setAccessible(true)
+      conn = conn_field.get(ssl_client.to_java)
+      ssl_sock = conn.getSession.getProtocol.getSocketConnection.getMysqlSocket
+      peer_certs = ssl_sock.getSession.getPeerCertificates
+      if peer_certs && peer_certs.length >= 2
+        ca_der = String.from_java_bytes(peer_certs.last.getEncoded)
+        certs[:ca_pem] = "-----BEGIN CERTIFICATE-----\n" + [ca_der].pack('m64') + "-----END CERTIFICATE-----\n"
+      end
+    rescue StandardError
+      # ignore if peer certs cannot be extracted via reflection
+    ensure
+      ssl_client&.close rescue nil
+    end
+
+    # 3. Try reading ca.pem, client-cert.pem, client-key.pem, public_key.pem from local or CI mysql container
+    container_cmd = find_mysql_container_cmd
+    if container_cmd
+      {
+        ca_pem: 'ca.pem',
+        client_cert_pem: 'client-cert.pem',
+        client_key_pem: 'client-key.pem',
+        public_key_pem: 'public_key.pem'
+      }.each do |key, filename|
+        next if certs[key]
+        pem = `#{container_cmd} cat /var/lib/mysql/#{filename} 2>/dev/null`.delete("\0")
+        certs[key] = pem if $?.success? && pem.include?('-----BEGIN ')
+      end
+    end
+
     certs
   rescue StandardError
-    {}
+    certs || {}
+  end
+
+  def find_mysql_container_cmd
+    %w[podman docker].each do |runtime|
+      ids = `#{runtime} ps --filter ancestor=mysql --format "{{.ID}}" 2>/dev/null`.lines.map(&:strip).reject(&:empty?)
+      if ids.empty?
+        ids = `#{runtime} ps --format "{{.ID}} {{.Image}} {{.Names}}" 2>/dev/null`.lines
+                .select { |l| l.include?('mysql') }
+                .map { |l| l.split.first }
+      end
+      return "#{runtime} exec #{ids.first}" unless ids.empty?
+    end
+    nil
+  rescue StandardError
+    nil
   end
 
 end
