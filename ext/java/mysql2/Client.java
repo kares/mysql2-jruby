@@ -626,12 +626,14 @@ public class Client extends RubyObject {
         return context.runtime.newFixnum(lastId);
     }
 
-    // A prepared-statement execute updates the shared connection state, so that
-    // Client#last_id / #affected_rows reflect it -- as libmysql does, and as
-    // ActiveRecord relies on for last_inserted_id (it reads @raw_connection.last_id).
-    void afterStatementExecute(long affectedRows, long lastId) {
+    // prepared-statement execute updates the shared connection state, so that
+    // Client#last_id / #affected_rows / #warning_count / #query_info reflect it;
+    // same as libmysql - as ActiveRecord relies on these for last_inserted_id & handle_warnings
+    void afterStatementExecute(ThreadContext context, Statement stmt, long affectedRows, long lastId) {
         this.affectedRows = affectedRows;
         this.lastId = lastId;
+        this.queryInfoString = extractServerInfo(stmt);
+        this.warningCount = nativeSession(context).getProtocol().getWarningCount();
     }
 
     @JRubyMethod(name = "read_timeout")

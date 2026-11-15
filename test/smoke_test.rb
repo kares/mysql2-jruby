@@ -136,6 +136,32 @@ class SmokeTest < Minitest::Test
     assert_equal '42S02', err.sql_state
   end
 
+  def test_statement_updates_warning_count_and_affected_rows
+    stmt_select = @client.prepare('SELECT 1/0 AS div_zero, ? AS val')
+    res = stmt_select.execute('hello')
+    assert_equal 1, res.size
+    assert_equal 1, @client.warning_count
+    stmt_select.close
+
+    # Clear warnings with a clean prepared SELECT
+    stmt_clean = @client.prepare('SELECT ? AS val')
+    stmt_clean.execute(42)
+    assert_equal 0, @client.warning_count
+    stmt_clean.close
+
+    # Prepared DML generating a warning (truncation with sql_mode='')
+    @client.query("CREATE TEMPORARY TABLE stmt_warn_test (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(2))")
+    @client.query("SET SESSION sql_mode = ''")
+    stmt_insert = @client.prepare('INSERT INTO stmt_warn_test (v) VALUES (?)')
+    stmt_insert.execute('toolong')
+    assert_equal 1, stmt_insert.affected_rows
+    assert_equal 1, @client.affected_rows
+    assert_equal 1, stmt_insert.last_id
+    assert_equal 1, @client.last_id
+    assert_equal 1, @client.warning_count
+    stmt_insert.close
+  end
+
   def test_close
     assert_equal false, @client.closed?
     @client.close

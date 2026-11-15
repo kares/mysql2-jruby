@@ -85,16 +85,18 @@ public class Statement extends RubyObject {
 
         try {
             for (int i = 0; i < argCount; i++) bindParam(context, i + 1, args[i]);
-            boolean hasResult = statement.execute();
+            final boolean hasResult = statement.execute();
             if (hasResult) { // null statementToClose: keep the PreparedStatement open for re-execute
-                client.afterStatementExecute(0, 0); // a result set carries no insert id (SELECT resets it)
+                this.affectedRows = 0;
+                this.lastId = 0;
+                client.afterStatementExecute(context, statement, 0, 0); // a result set carries no insert id (SELECT resets it)
                 return client.buildResult(context, new JdbcRowSource(statement.getResultSet(), null), client.mergedOptions(context, opts), true);
             }
             this.affectedRows = Math.max(statement.getUpdateCount(), 0);
             try (ResultSet keys = statement.getGeneratedKeys()) {
                 this.lastId = keys.next() ? keys.getLong(1) : 0;
             }
-            client.afterStatementExecute(this.affectedRows, this.lastId);
+            client.afterStatementExecute(context, statement, this.affectedRows, this.lastId);
 
             return context.nil;
         } catch (SQLException e) {
