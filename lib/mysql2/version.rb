@@ -3,4 +3,5 @@
 
 module Mysql2
   VERSION = "0.5.7.0".freeze
+  MINIMAL_CONNECTOR_VERSION = "8.4.0".freeze # LTS version supported ~ 2032
 end

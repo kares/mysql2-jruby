@@ -5,7 +5,6 @@ CLASSES    = 'target/classes'
 JAR        = 'lib/mysql2.jar'
 
 CONNECTOR  = ENV['RUBY_MYSQL2_CONNECTOR_JAR'] || 'vendor/mysql-connector-j.jar'
-CONNECTOR_VERSION = ENV['CONNECTOR_VERSION'] || '9.4.0'
 
 CLEAN.include(CLASSES)
 CLOBBER.include(JAR)
@@ -20,12 +19,16 @@ def run_jruby(script, extra_classpath: nil)
   sh({ 'CLASSPATH' => cp }, RbConfig.ruby, *Array(script))
 end
 
-desc "Download MySQL Connector/J #{CONNECTOR_VERSION} from Maven Central to #{CONNECTOR}"
+desc "Download MySQL Connector/J from Maven Central to #{CONNECTOR}"
 task :connector do
-  require 'open-uri'
-  require 'digest'
-  base = "https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/#{CONNECTOR_VERSION}"
-  jar_url = "#{base}/mysql-connector-j-#{CONNECTOR_VERSION}.jar"
+  # default to minimum supported version - so compilation targets the baseline ABI
+  connector_version = ENV['CONNECTOR_VERSION'] || begin
+                                                    require_relative 'lib/mysql2/version'
+                                                    Mysql2::MINIMAL_CONNECTOR_VERSION
+                                                  end
+  require 'open-uri'; require 'digest'
+  base = "https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/#{connector_version}"
+  jar_url = "#{base}/mysql-connector-j-#{connector_version}.jar"
 
   puts "Downloading #{jar_url}"
   jar = URI.parse(jar_url).open('rb', &:read)
@@ -35,13 +38,13 @@ task :connector do
 
   mkdir_p File.dirname(CONNECTOR)
   File.binwrite(CONNECTOR, jar)
-  puts "Saved #{CONNECTOR} (#{jar.bytesize} bytes, sha1 #{actual})"
+  puts "Saved #{CONNECTOR} version: #{connector_version} (#{jar.bytesize} bytes)"
 end
 
 desc 'Compile the Java backend into lib/mysql2.jar'
 task :compile do
   unless File.exist?(CONNECTOR)
-    abort "Connector/J not found at #{CONNECTOR}. Run `rake connector` to download it " \
+    abort "Connector/J not found at #{CONNECTOR}; run `rake connector` to download it " \
           "(or set RUBY_MYSQL2_CONNECTOR_JAR)."
   end
   mkdir_p CLASSES

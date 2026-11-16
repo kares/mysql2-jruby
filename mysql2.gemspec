@@ -13,7 +13,7 @@ Gem::Specification.new do |s|
   s.homepage = 'https://github.com/kares/mysql2-jruby'
 
   s.required_ruby_version = '>= 3.1' # >= JRuby 9.4
-  s.requirements << 'jar com.mysql, mysql-connector-j, >= 8.2'
+  s.requirements << "jar com.mysql:mysql-connector-j, >= #{Mysql2::MINIMAL_CONNECTOR_VERSION}"
 
   s.files = Dir.chdir(__dir__) do
     files = `git ls-files -z ext lib README.md CHANGELOG.md LICENSE COPYING mysql2.gemspec`.split("\x0")
