@@ -236,9 +236,13 @@ examples only.
       `ConnectionError`. Confirmed by AR's own `test_read_timeout_exception`. Server-side
       statement timeouts (`ER_QUERY_TIMEOUT 3024`, `ER_QUERY_INTERRUPTED 1317`) come through as
       vendor codes and dispatch correctly.
-- [x] **`warning_count`** — updated after every `Client#query` from `protocol.getWarningCount()`,
-      powering ActiveRecord's `handle_warnings` when `ActiveRecord.db_warnings_action` is set.
-- [ ] Confirm `server_info[:version]` against a live MariaDB server (low priority / deferred).
+- [x] **`warning_count`** — updated after every `Client#query` and `Statement#execute` from
+      `protocol.getWarningCount()`, powering ActiveRecord's `handle_warnings` when
+      `ActiveRecord.db_warnings_action` is set.
+- [x] **`server_info` (`:version` and `:id`)** — `server_info[:version]` returns the full
+      server version string (which Rails' `version_string` regex `^(?:5\.5\.5-)?(\d+\.\d+\.\d+)`
+      and `mariadb?` check parse directly), and `serverVersionId` strips any leading `5.5.5-`
+      MariaDB replication prefix before computing `major * 10000 + minor * 100 + patch`.
 
 ---
 

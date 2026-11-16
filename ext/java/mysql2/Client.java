@@ -3,8 +3,6 @@
 
 package mysql2;
 
-import java.io.File;
-import java.net.MalformedURLException;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.URLEncoder;
@@ -12,7 +10,6 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.Driver;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
@@ -46,7 +43,6 @@ import org.jruby.RubyClass;
 import org.jruby.RubyException;
 import org.jruby.RubyFixnum;
 import org.jruby.RubyHash;
-import org.jruby.RubyInteger;
 import org.jruby.RubyObject;
 import org.jruby.RubyRational;
 import org.jruby.RubyString;
@@ -813,7 +809,7 @@ public class Client extends RubyObject {
         try {
             String version = connection(context).getMetaData().getDatabaseProductVersion();
             RubyHash info = RubyHash.newHash(runtime);
-            info.fastASet(runtime.newSymbol("id"), runtime.newFixnum(serverVersionId(version)));
+            info.fastASet(runtime.newSymbol("id"), runtime.newFixnum(getServerVersionId(version)));
             // tag with the connection encoding, exported to Encoding.default_internal
             info.fastASet(runtime.newSymbol("version"), encodedString(context, version));
             return info;
@@ -822,11 +818,17 @@ public class Client extends RubyObject {
         }
     }
 
+    private static final Pattern SERVER_VERSION_PATTERN =
+            Pattern.compile("^(?:5\\.5\\.5-)?(\\d+)\\.(\\d+)\\.(\\d+)");
+
     /** mysql_get_server_version() equivalent: major*10000 + minor*100 + patch */
-    private static long serverVersionId(String version) {
-        Matcher matcher = Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)").matcher(version);
+    static long getServerVersionId(final String version) {
+        if (version == null) return 0;
+        Matcher matcher = SERVER_VERSION_PATTERN.matcher(version);
         if (!matcher.find()) return 0;
-        return Long.parseLong(matcher.group(1)) * 10000 + Long.parseLong(matcher.group(2)) * 100 + Long.parseLong(matcher.group(3));
+        return Long.parseLong(matcher.group(1)) * 10000 +
+                    Long.parseLong(matcher.group(2)) * 100 +
+                        Long.parseLong(matcher.group(3));
     }
 
     /** Build a String tagged with the connection encoding, exported to default_internal */

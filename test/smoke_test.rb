@@ -29,6 +29,12 @@ class SmokeTest < Minitest::Test
     assert_kind_of Integer, info[:id]
     assert_kind_of String, info[:version]
     refute_empty info[:version]
+
+    # MariaDB replication prefix (5.5.5-10.11.6-MariaDB) is stripped when computing :id
+    server_version_id = Java::Mysql2::Client.java_class.declared_method(:getServerVersionId, java.lang.String.java_class)
+    server_version_id.accessible = true
+    assert_equal 80040, server_version_id.invoke_static('8.0.40')
+    assert_equal 101106, server_version_id.invoke_static('5.5.5-10.11.6-MariaDB-1:10.11.6+maria~ubu2204')
   end
 
   def test_ping
