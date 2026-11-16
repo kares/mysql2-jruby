@@ -111,7 +111,7 @@ they are JRuby core issues (Marshal, `Array#-`, SnakeYAML limits), not adapter g
 
 ## Status
 
-Tested against JRuby 10.0 and MySQL 8.0 / 8.4 (see [`.github/workflows/test.yml`](.github/workflows/test.yml)).
+Tested against JRuby 9.4 / 10.x and MySQL 8.0 / 8.4 (see [`.github/workflows/test.yml`](.github/workflows/test.yml)).
 
 | suite | result |
 | --- | --- |
