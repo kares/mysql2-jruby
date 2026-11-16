@@ -12,13 +12,13 @@ connector_jar = ENV['RUBY_MYSQL2_CONNECTOR_JAR']
 require connector_jar if connector_jar
 
 begin
-  java.lang.Class.forName('com.mysql.cj.jdbc.NonRegisteringDriver', false, nil)
-rescue java.lang.ClassNotFoundException
+  JRuby::Util.load_java_class('com.mysql.cj.jdbc.NonRegisteringDriver')
+rescue NameError
   begin
     require 'jar_dependencies' unless defined?(Jars)
     require_jar 'com.mysql', 'mysql-connector-j', Mysql2::MINIMAL_CONNECTOR_VERSION
   rescue LoadError, RuntimeError => e
-    raise if e.instance_of?(RuntimeError) && !e.message&.include?('(LoadError)')
+    raise(e) if e.instance_of?(RuntimeError) && !e.message&.include?('LoadError')
     fail LoadError, "MySQL Connector/J not found on classpath " +
                     "(set RUBY_MYSQL2_CONNECTOR_JAR or add jar to class-path)"
   end
