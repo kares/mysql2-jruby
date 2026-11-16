@@ -1,4 +1,4 @@
-require "mysql2/version"
+require "mysql2/version" unless defined? Mysql2::VERSION
 
 module Mysql2
   # makes `gem "mysql2", "~> 0.5"` (e.g. ActiveRecord's mysql2_adapter.rb)
@@ -31,7 +31,11 @@ module Mysql2
         # must keep every current gem (incl. default gems) or `gem` rejects them
         specs_by_name = Bundler.rubygems.add_default_gems_to(specs)
         specs_by_name[GEM_NAME] = alias_spec
-        Bundler.rubygems.replace_gem(specs_by_name)
+        if Bundler.rubygems.method(:replace_gem).arity == 1
+          Bundler.rubygems.replace_gem(specs_by_name)
+        else
+          Bundler.rubygems.replace_gem(specs, specs_by_name)
+        end
       end
 
       def register_with_rubygems
