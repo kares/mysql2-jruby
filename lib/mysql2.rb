@@ -12,7 +12,7 @@ connector_jar = ENV['RUBY_MYSQL2_CONNECTOR_JAR']
 require connector_jar if connector_jar
 
 begin
-  JRuby::Util.load_java_class('com.mysql.cj.jdbc.NonRegisteringDriver')
+  JRuby::Util.load_java_class('com.mysql.cj.Constants')
 rescue NameError
   begin
     require 'jar_dependencies' unless defined?(Jars)
