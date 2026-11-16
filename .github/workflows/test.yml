@@ -6,13 +6,17 @@ on:
 
 jobs:
   test:
-    name: "rake test (MySQL ${{ matrix.mysql }})"
+    name: "rake test (MySQL ${{ matrix.mysql }}, Connector/J ${{ matrix.connector }})"
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        mysql: ['8.0', '8.4']
+        include:
+          - mysql: '8.0'
+            connector: '8.4.0'
+          - mysql: '8.4'
+            connector: '9.7.0'
 
     services:
       mysql:
@@ -29,6 +33,7 @@ jobs:
           --health-retries=10
 
     env:
+      CONNECTOR_VERSION: ${{ matrix.connector }}
       MYSQL_HOST: 127.0.0.1
       MYSQL_PORT: 3306
       MYSQL_USER: root
@@ -91,6 +96,7 @@ jobs:
           --health-retries=10
 
     env:
+      CONNECTOR_VERSION: '9.7.0'
       MYSQL_HOST: 127.0.0.1
       MYSQL_PORT: 3306
       MYSQL_USER: root
