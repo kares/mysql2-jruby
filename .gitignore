@@ -2,6 +2,8 @@ target/
 lib/mysql2.jar
 vendor/*.jar
 prototype/
+*.gem
+cilog.txt
 # copied upstream specs used for triage (contains local DB creds)
 spec/
 

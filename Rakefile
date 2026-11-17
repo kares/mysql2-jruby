@@ -263,3 +263,52 @@ namespace :rails do
     end
   end
 end
+
+# Release the gem under the `mysql2` name (platform: java) to a gem.coop namespace
+#
+#   rake build
+#   GEM_HOST_API_KEY=... rake release
+#
+def gem_coop_host(namespace = nil)
+  ns = (namespace || '@kares').delete_prefix('@')
+  ENV['RUBYGEMS_HOST'] || "https://gem.coop/@#{ns}"
+end
+
+def load_mysql2_gemspec(host: nil)
+  spec = Gem::Specification.load(File.expand_path('mysql2.gemspec', __dir__))
+  spec.name = 'mysql2'
+  spec.metadata['allowed_push_host'] = host if host
+  spec
+end
+
+desc 'Build the mysql2 (-java) gem for gem.coop. Optional: rake build[namespace]'
+task :build, [:namespace] => :compile do |_, args|
+  require 'rubygems/package'
+  host = gem_coop_host(args[:namespace])
+  spec = load_mysql2_gemspec(host: host)
+  gem_file = Gem::Package.build(spec)
+  puts "Built #{gem_file} (allowed_push_host: #{host})"
+end
+
+desc 'Build, push to gem.coop and tag v<version>; optional: rake release[@namespace]'
+task :release, [:namespace] do |_, args|
+  host = gem_coop_host(args[:namespace])
+  unless `git status --porcelain --untracked-files=no`.empty?
+    abort 'Working tree has uncommitted changes; commit or stash before releasing.'
+  end
+
+  spec = load_mysql2_gemspec(host: host)
+  tag = "v#{spec.version}"
+  unless ENV['SKIP_TAG'] == 'true'
+    abort "git tag #{tag} already exists" if system("git rev-parse -q --verify refs/tags/#{tag} > /dev/null 2>&1")
+  end
+
+  Rake::Task[:build].invoke(args[:namespace])
+  gem_file = spec.file_name
+
+  sh RbConfig.ruby, '-S', 'gem', 'push', gem_file, '--host', host
+
+  unless ENV['SKIP_TAG'] == 'true'
+    sh 'git', 'tag', '-a', tag, '-m', "Release #{spec.version}"
+  end
+end
