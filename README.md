@@ -1,48 +1,23 @@
 # Mysql2 (JRuby)
 
-A JRuby-native implementation of [mysql2](https://github.com/brianmario/mysql2).
-Instead of *libmysqlclient* this gem talks to MySQL through the **MySQL Connector/J** driver.
+A JRuby-native implementation of [mysql2](https://github.com/brianmario/mysql2) backed by the
+**MySQL Connector/J** JDBC driver instead of *libmysqlclient*.
 
-The goal here is to run Rails's stock `mysql2` adapter unmodified by re-implementing 
-the API required by `ActiveRecord`'s adapter (`Mysql2::Client`, `Mysql2::Result`, 
-`Mysql2::Statement` and `Mysql2::Field`).
-
-## Status
-
-Tested against JRuby 10.0 and MySQL 8.0 / 8.4 (see [`.github/workflows/test.yml`](.github/workflows/test.yml)).
-
-| suite | result |
-| --- | --- |
-| Rails' own ActiveRecord suite (8.0.5, mysql2 adapter) | 8649 runs, 28119 assertions, **0 failures**, 92 excluded |
-| upstream mysql2 RSpec suite | 347 examples, **0 failures**, 65 excluded |
-| in-house minitest checks | 54 runs, 129 assertions, **0 failures** |
-
-CI additionally runs the ActiveRecord suite against Rails 7.2.
-
-That is **98.9%** of ActiveRecord's suite green, with nothing left failing. 
-The 92 excluded tests (`test/rails/excludes/mysql2/`, each carrying a note on why) 
-are not adapter gaps: 58 load the `sqlite3` C extension, which can't run on JRuby 
-and the rest are (minor) JRuby bugs - `Marshal` round-trips, `Array#-` calling `#hash`, 
-SnakeYAML's document size limit, msgpack-java, thread-scheduling races.
-
-Performance against CRuby + the C `mysql2` gem is tracked in
-[`benchmark/RESULTS.md`](benchmark/RESULTS.md) — the short version is roughly **1.5x** on
-raw driver throughput and **1.4x** through ActiveRecord (geometric mean, JRuby 10 vs Ruby 3.4.8).
+**NOTE:** the primary goal of this gem is **(full) compliance with `ActiveRecord`**, allowing Ruby on Rails
+applications to run on JRuby using Rails's stock `mysql2` adapter completely unmodified, rather than replicating 
+every low-level *libmysqlclient* C API feature available in the **mysql2** gem.
 
 ## Setup
 
-To be able to run `ActiveRecord` (`mysql2_adapter`) unmodified the gem is released 
-under the **same name** (as a *-java* variant) in a [gem.coop](https://gem.coop/) 
-namespace, so the `Gemfile` just needs:
+To be able to run `ActiveRecord` (`mysql2_adapter`) unmodified the gem is released under the **same name** 
+(as a *-java* variant) in a [gem.coop](https://gem.coop/) namespace, so the `Gemfile` just needs:
 
 ```ruby
 source "https://rubygems.org"
 
-ruby ">= 3.2.0"
-
 gem "rails", "~> 8.0.0"
 
-# mysql2 as the database adapter for Active Record
+# mysql2 -java variant as a drop-in replacement for mysql2 gem on JRuby
 gem "mysql2", "~> 0.5", platform: :jruby, source: 'https://gem.coop/@kares'
 ```
 <!--
@@ -55,21 +30,37 @@ gem "mysql2-jruby", platform: :jruby, require: "mysql2/compat"
 ```
 -->
 
-### Connector/J
+### Connector/J (Required on the Classpath)
 
-The driver jar is **not** bundled with the gem; you will need to put MySQL Connector/J 
-(>= 8.2, 9.4 tested) on the JVM classpath, or point `RUBY_MYSQL2_CONNECTOR_JAR` at it:
+The **MySQL Connector/J** JDBC driver (`com.mysql:mysql-connector-j`, `>= 8.4.0`)
+is **not** bundled with the gem and **must be available on the JVM classpath** at runtime.
 
-```sh
-export RUBY_MYSQL2_CONNECTOR_JAR=/path/to/mysql-connector-j-9.4.0.jar
-```
+You can provide the driver in one of the following ways:
+
+1. **via [`jar-dependencies`](https://github.com/jruby/jar-dependencies)** (shipped as a default gem with JRuby):
+   This gem declares `jar com.mysql:mysql-connector-j` in its gemspec `requirements`.
+   Run `lock_jars` in your project to resolve and generate `Jars.lock` (or pin a specific version
+   in a `Jarfile`), then load it with `require 'jars/setup'`:
+
+   ```sh
+   bundle install
+   lock_jars
+   ```
+
+2. **via `CLASSPATH` or `RUBY_MYSQL2_CONNECTOR_JAR`:**
+   Place the Connector/J jar on the JVM `CLASSPATH`, or point `RUBY_MYSQL2_CONNECTOR_JAR` directly
+   at the jar file:
+
+   ```sh
+   export RUBY_MYSQL2_CONNECTOR_JAR=/path/to/mysql-connector-j-9.7.0.jar
+   ```
 
 ## Usage
 
 ```ruby
 require 'mysql2'
-client = Mysql2::Client.new(host: '127.0.0.1', port: 3306,
-                            username: 'root', password: 'root', database: 'test')
+client = Mysql2::Client.new(username: 'root', password: 'r00t', database: 'borg')
+
 client.query("SELECT id, name, created_at FROM users").each do |row|
   row['id']         # => Integer
   row['name']       # => String (UTF-8)
@@ -117,6 +108,24 @@ RAILS=../rails jruby -S rake rails:test      # full suite; TEST=test/cases/... t
 Per-test skips live in `test/rails/excludes/mysql2/`, each with a note on why —
 they are JRuby core issues (Marshal, `Array#-`, SnakeYAML limits), not adapter gaps.
 `NO_EXCLUDES=true` runs without them.
+
+## Status
+
+Tested against JRuby 10.0 and MySQL 8.0 / 8.4 (see [`.github/workflows/test.yml`](.github/workflows/test.yml)).
+
+| suite | result |
+| --- | --- |
+| Rails' ActiveRecord suite (mysql2 adapter) | 8649 runs, 28119 assertions, **0 failures**, 92 excluded |
+| upstream mysql2 RSpec suite | 347 examples, **0 failures**, 65 excluded |
+| in-house minitest checks | 73 runs, 228 assertions, **0 failures** |
+
+CI runs the `ActiveRecord` test suite against Rails 7.2 and 8.x.
+
+Gem is passing **98.9%** of ActiveRecord's suite green, with nothing left failing.
+Most of the excludes are (already fixed) JRuby bugs or concurrency issues with tests assuming GIL behavior.
+
+Performance against CRuby + the C `mysql2` gem is tracked in [`benchmark/RESULTS.md`](benchmark/RESULTS.md); 
+TL:DR is roughly **1.5x** on driver throughput and **1.4x** with ActiveRecord (geometric mean: JRuby 10.0.6 vs Ruby 3.4.8).
 
 ## Limitations
 
@@ -171,12 +180,16 @@ the C `mysql2` gem either have no JDBC equivalent or behave (slightly) different
 
 ## License
 
-This gem's Ruby and Java code is licensed under the [MIT License](LICENSE). 
-Its source is included in the gem.
+Copyright (c) 2026 Karol Bucek.
+
+This gem's Ruby and Java code is licensed under the
+[GNU Lesser General Public License v3.0 or later](LICENSE) (`LGPL-3.0-or-later`),
+incorporating the [GNU General Public License v3.0](COPYING), source is included in the gem.
 
 MySQL Connector/J is a separate runtime dependency and is not bundled with this gem.
 Oracle distributes its Community edition under GPLv2 with the
 [Universal FOSS Exception v1.0](https://oss.oracle.com/licenses/universal-foss-exception/).
 The exception permits linking with open-source software distributed with complete
-corresponding source under an OSI-approved license, including MIT, while each part
-retains its own license. Connector/J remains subject to its own license and notices.
+corresponding source under an OSI-approved license, including LGPL 3.0 (or later),
+while each part retains its own license. 
+Connector/J remains subject to its own license and notices!

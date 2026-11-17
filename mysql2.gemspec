@@ -4,7 +4,7 @@ Gem::Specification.new do |s|
   s.name     = 'mysql2-jruby'
   s.version  = Mysql2::VERSION
   s.platform = 'java'
-  s.license  = 'MIT'
+  s.license  = 'LGPL-3.0-or-later'
   s.summary  = 'A simple, fast MySQL library for JRuby'
   s.description = "JRuby native re-implementation of the Mysql2 gem, " +
                   "with emphasis on being able to run ActiveRecord, " +
@@ -16,7 +16,7 @@ Gem::Specification.new do |s|
   s.requirements << 'jar com.mysql, mysql-connector-j, >= 8.2'
 
   s.files = Dir.chdir(__dir__) do
-    files = `git ls-files -z lib README.md CHANGELOG.md LICENSE mysql2.gemspec`.split("\x0")
+    files = `git ls-files -z ext lib README.md CHANGELOG.md LICENSE COPYING mysql2.gemspec`.split("\x0")
     files << 'lib/mysql2.jar'
     files
   end

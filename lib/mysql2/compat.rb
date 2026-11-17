@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Karol Bucek
+# SPDX-License-Identifier: LGPL-3.0-or-later
+
 require "mysql2/version" unless defined? Mysql2::VERSION
 
 module Mysql2
