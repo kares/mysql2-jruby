@@ -7,3 +7,4 @@ exclude :test_roundtrips_binary_attribute, 'JRuby msgpack-java does not support 
 exclude :test_roundtrips_record_and_cached_associations, 'JRuby msgpack-java does not support the ActiveSupport::MessagePack AR extension'
 exclude :"test_roundtrips_new_record?_status", 'JRuby msgpack-java does not support the ActiveSupport::MessagePack AR extension'
 exclude :"test_raises_ActiveSupport::MessagePack::MissingClassError_if_record_class_no_longer_exists", 'JRuby msgpack-java does not support the ActiveSupport::MessagePack AR extension'
+exclude :test_roundtrips_time_attribute, 'JRuby msgpack-java does not support the ActiveSupport::MessagePack AR extension'
