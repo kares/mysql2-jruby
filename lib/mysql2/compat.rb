@@ -12,8 +12,9 @@ module Mysql2
   #
   module Compat
     GEM_NAME = "mysql2".freeze
+
     class << self
-      def register_gem_alias
+      def register_gem_alias!
         bundler? ? register_with_bundler : register_with_rubygems
       end
 
@@ -62,6 +63,6 @@ module Mysql2
   end
 end
 
-Mysql2::Compat.register_gem_alias
+Mysql2::Compat.register_gem_alias!
 
 require "mysql2"
