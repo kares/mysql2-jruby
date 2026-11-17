@@ -4,15 +4,16 @@ Compares **CRuby + mysql2** (the C extension) against **JRuby + this gem** (Conn
 over JDBC with raw text-protocol casting). Both expose the same `Mysql2::Client` API,
 so the same scenarios run unchanged on each engine.
 
-Two suites:
+Three suites (plus the `compare.rb` runner):
 
 | script | what it measures |
 |--------|------------------|
-| `types.rb`   | one scenario per MySQL column type — the per-value decoding cost |
-| `run.rb`     | a mix of whole-query shapes (`cast: false`, `as: :array`, `escape`, …) |
-| `compare.rb` | runs one of the above under both engines via `mise` and diffs them |
+| `types.rb`         | one scenario per MySQL column type — the per-value decoding cost |
+| `run.rb`           | a mix of whole-query shapes (`cast: false`, `as: :array`, `escape`, …) |
+| `active_record.rb` | ActiveRecord model instantiation, `pluck`, `count`, and batched writes |
+| `compare.rb`       | runs one of the above under both engines via `mise` and diffs them |
 
-[RESULTS.md](RESULTS.md) has a recorded run of the per-type suite.
+[RESULTS.md](RESULTS.md) has recorded runs of the per-type, mixed, and ActiveRecord suites.
 
 ## Prerequisites
 
@@ -23,12 +24,19 @@ Two suites:
 - CRuby side: the `mysql2` gem installed for the CRuby that `mise` will use:
 
   ```sh
-  mise exec ruby@3.4.8 -- gem install mysql2
+  mise exec ruby@4.0.1 -- gem install mysql2
   ```
 
   On Fedora that needs the client headers (`sudo dnf install mariadb-connector-c-devel`),
   or point the build at an existing install with
   `-- --with-mysql-config=/path/to/mariadb_config`.
+- For `active_record.rb`: the same `activerecord` version installed on **both**
+  CRuby and JRuby (otherwise the comparison measures AR versions rather than drivers):
+
+  ```sh
+  mise exec ruby@4.0.1 -- gem install activerecord -v 8.1.4.1
+  mise exec ruby@jruby-10.1.3.0 -- gem install activerecord -v 8.1.4.1
+  ```
 
 The table (`mysql2_bench`) is created, migrated and seeded automatically on each run.
 
@@ -38,16 +46,17 @@ The table (`mysql2_bench`) is created, migrated and seeded automatically on each
 # side-by-side comparison (this is the interesting one)
 rake bench:compare                  # per-type suite
 rake bench:compare BENCH_SCRIPT=run.rb
+BENCH_WARMUP=60 rake bench:compare BENCH_SCRIPT=active_record.rb
 
 # single engine
 rake bench                          # mixed scenarios, JRuby + this gem
 rake bench:types                    # per-type,        JRuby + this gem
-mise exec ruby@3.4.8 -- ruby benchmark/types.rb    # CRuby + the C extension
+mise exec ruby@4.0.1 -- ruby benchmark/types.rb    # CRuby + the C extension
 ```
 
-`rake bench*` launches JRuby with the connector jar on the JVM classpath. To run by
-hand under JRuby, set it yourself:
-`CLASSPATH=vendor/mysql-connector-j.jar jruby benchmark/types.rb`.
+`support.rb` prepends `lib/` to `$LOAD_PATH` and loads `vendor/mysql-connector-j.jar`
+automatically (override with `RUBY_MYSQL2_CONNECTOR_JAR` or `CLASSPATH`), so
+`jruby benchmark/types.rb` works directly from the repository root as well.
 
 ## Knobs (env vars)
 
@@ -60,14 +69,22 @@ hand under JRuby, set it yourself:
 | `BENCH_LIMIT`    | `100`  | rows per query (`types.rb`) |
 | `BENCH_COPIES`   | `8`    | aliases of the column per row (`types.rb`) |
 | `BENCH_PREPARED` | –      | set to `true` to go through `Client#prepare` (`types.rb`) |
-| `BENCH_MRI`      | `3.4.8`| mise ruby for the C-extension side (`compare.rb`) |
+| `AR_VERSION`     | `8.1.4.1` | ActiveRecord version to activate (`active_record.rb`) |
+| `AR_PREPARED_STATEMENTS` | – | set to `true` to enable AR prepared statements (`active_record.rb`) |
+| `BENCH_WRITES`   | `25`   | write operations batched per transaction (`active_record.rb`) |
+| `BENCH_MRI`      | `4.0.1`| mise ruby for the C-extension side (`compare.rb`) |
 | `BENCH_JRUBY`    | `mise.toml` | mise ruby for this gem (`compare.rb`) |
 | `BENCH_CPUS`     | –      | `taskset -c` mask pinning both engines to the same cores (`compare.rb`) |
 | `BENCH_FORMAT`   | –      | `json` to emit machine-readable results |
 | `BENCH_OUT`      | –      | file to write the JSON to instead of stdout |
 
-Give JRuby a real warmup (`BENCH_WARMUP=5` or more) for representative numbers — the
-first thousand iterations run interpreted before the JIT kicks in.
+Give JRuby a real warmup (`BENCH_WARMUP=5`–`10` for `types.rb`, `BENCH_WARMUP=60`
+for `active_record.rb`) for representative numbers — the first thousand iterations
+run interpreted before the JIT kicks in, and ActiveRecord has much more Ruby to JIT.
+
+For JIT-to-JIT comparisons, CRuby leaves YJIT off by default unless
+`RUBY_YJIT_ENABLE=1` (or `RUBYOPT=--yjit`) is set; JRuby 10 enables `+indy +jit`
+by default (and honors `JAVA_HOME` to select the JVM).
 
 ## Getting stable numbers
 

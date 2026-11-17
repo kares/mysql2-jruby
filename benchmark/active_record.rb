@@ -6,23 +6,23 @@
 #   ruby  benchmark/active_record.rb
 #   ruby  benchmark/compare.rb active_record.rb
 #
-# Both engines need the same ActiveRecord (`gem install activerecord -v 8.0.5`),
+# Both engines need the same ActiveRecord (`gem install activerecord -v 8.1.4.1`),
 # otherwise the comparison measures AR versions rather than drivers. Env knobs on
 # top of support.rb's, and BENCH_SETUP=0 to skip re-seeding:
-#   AR_VERSION=8.0.5              ActiveRecord version to activate
+#   AR_VERSION=8.1.4.1            ActiveRecord version to activate
 #   AR_PREPARED_STATEMENTS=true   turn on the adapter's prepared statements
 #   BENCH_WRITES=25               write operations batched per transaction
 #
 # AR is far more Ruby code than the driver, so JRuby needs a much longer warmup
-# here than in types.rb -- BENCH_WARMUP=15 or more, otherwise the scenarios just
-# rank themselves by how far the JIT had got when each one started.
+# here than in types.rb -- BENCH_WARMUP=15 or more (60s recommended), otherwise
+# the scenarios just rank themselves by how far the JIT had got when each started.
 require_relative 'support'
 
 # lets the adapter's `gem "mysql2", "~> 0.5"` resolve to this gem, which is
 # loaded off $LOAD_PATH rather than installed under that name
 require 'mysql2/compat' if RUBY_ENGINE == 'jruby'
 
-AR_VERSION = ENV.fetch('AR_VERSION', '8.0.5')
+AR_VERSION = ENV.fetch('AR_VERSION', '8.1.4.1')
 gem 'activerecord', AR_VERSION
 require 'active_record'
 

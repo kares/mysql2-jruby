@@ -5,8 +5,8 @@
 #   ruby benchmark/compare.rb run.rb     # the mixed-scenario suite
 #
 # Both Rubies must be installed under mise, and the CRuby one needs the mysql2
-# gem (`mise exec ruby@3.4.8 -- gem install mysql2`). ENV:
-#   BENCH_MRI=3.4.8              mise ruby for the C-extension side
+# gem (`mise exec ruby@4.0.1 -- gem install mysql2`). ENV:
+#   BENCH_MRI=4.0.1              mise ruby for the C-extension side
 #   BENCH_JRUBY=jruby-10.0.6.0   mise ruby for this gem (default: ./mise.toml)
 # plus everything the benchmark script itself understands (BENCH_TIME, ...).
 require 'json'
@@ -22,7 +22,7 @@ def mise_toml_ruby
   File.exist?(toml) ? File.read(toml)[/^\s*ruby\s*=\s*"([^"]+)"/, 1] : nil
 end
 
-MRI   = ENV['BENCH_MRI']   || '3.4.8'
+MRI   = ENV['BENCH_MRI']   || '4.0.1'
 JRUBY = ENV['BENCH_JRUBY'] || mise_toml_ruby || 'jruby'
 
 unless File.exist?(File.join(ROOT, 'lib', 'mysql2.jar'))
