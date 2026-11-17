@@ -21,8 +21,7 @@ Gem::Specification.new do |s|
     files
   end
 
-  # bigdecimal and date are no longer default gems on Ruby 3.4+;
-  # lib/mysql2.rb requires both
-  s.add_dependency 'bigdecimal'
-  s.add_dependency 'date'
+  # bigdecimal and date are no longer default gems on Ruby 3.4+; lib/mysql2.rb requires both
+  s.add_dependency 'bigdecimal', '< 5.0'
+  s.add_dependency 'date', '< 4.1'
 end
